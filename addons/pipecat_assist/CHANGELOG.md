@@ -11,3 +11,5 @@
   custom integration brand directory, and the Ingress UI.
 - Fixed multi-architecture image publishing to select the matching Home
   Assistant base image for each target architecture.
+- Fixed image publishing tags so Home Assistant can pull the semver tag that
+  matches `version: "0.1.0"`.
