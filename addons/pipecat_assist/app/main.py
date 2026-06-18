@@ -203,8 +203,23 @@ async def run_bot(
 ):
     """Run one Pipecat session."""
 
-    if not config.openai_api_key:
-        raise RuntimeError("OpenAI API key is not configured")
+    integration = config.model_integration(flow)
+    provider_kind = integration.kind if integration else "openai"
+    if provider_kind != "openai":
+        raise RuntimeError(
+            f"Realtime voice runtime for {provider_kind} is not enabled in this build yet"
+        )
+
+    api_key = (integration.api_key if integration else "") or config.openai_api_key
+    if not api_key:
+        raise RuntimeError("The selected realtime provider is missing an API key")
+
+    model_step = flow.model_step()
+    realtime_model = (
+        (model_step.model if model_step else "")
+        or flow.model
+        or (integration.default_realtime_model if integration else "")
+    )
 
     bridge: HomeAssistantMCPBridge | None = None
     tools_schema = None
@@ -225,9 +240,9 @@ async def run_bot(
             bridge = None
 
     llm = OpenAIRealtimeLLMService(
-        api_key=config.openai_api_key,
+        api_key=api_key,
         settings=OpenAIRealtimeLLMService.Settings(
-            model=flow.model,
+            model=realtime_model,
             system_instruction=flow.instructions,
             session_properties=_session_properties(flow, tools_schema),
         ),

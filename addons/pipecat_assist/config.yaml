@@ -1,5 +1,5 @@
 name: Pipecat Assist
-version: "0.1.0"
+version: "0.1.1"
 slug: pipecat_assist
 description: Realtime Pipecat assistant for Home Assistant with MCP device control and ESP32 satellite support.
 url: https://github.com/kyvaith/pipecat-homeassistant
@@ -16,35 +16,8 @@ ingress_port: 7860
 panel_icon: mdi:account-voice
 homeassistant_api: true
 options:
-  openai_api_key: ""
-  instructions: >-
-    You are a realtime Home Assistant voice agent. Speak naturally and briefly.
-    Use Home Assistant MCP tools only when the user clearly asks to control,
-    inspect, or automate the home. Never invent device state. If a room,
-    device, or action is ambiguous, ask one short clarification.
-  text_model: "gpt-5.4-mini"
-  realtime_model: "gpt-realtime-2"
-  realtime_voice: "marin"
-  runner_host: "0.0.0.0"
-  runner_port: 7860
   esp32_mode: false
-  satellite_shared_secret: ""
-  ha_mcp_url: ""
-  longlived_token: ""
-  mcp_tool_allowlist: ""
   log_level: "INFO"
 schema:
-  openai_api_key: password
-  instructions: str
-  text_model: str
-  realtime_model: str
-  realtime_voice: str
-  runner_host: str
-  runner_port: int(1024,65535)
   esp32_mode: bool
-  satellite_shared_secret: password
-  ha_mcp_url: str
-  longlived_token: password
-  mcp_tool_allowlist: str
   log_level: list(DEBUG|INFO|WARNING|ERROR)
-

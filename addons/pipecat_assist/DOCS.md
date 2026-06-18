@@ -8,26 +8,29 @@
 
 ## Configuration
 
-`openai_api_key`
-: API key used by OpenAI Realtime and the text bridge.
+Most settings live in the Pipecat Assist web UI, not in Home Assistant add-on
+options.
 
-`runner_host`
-: Host/IP passed to Pipecat runner. For `esp32_mode`, use the Home Assistant
-LAN IP, not `localhost`.
+`esp32_mode`
+: Startup-time flag for Pipecat's ESP32 SmallWebRTC SDP handling.
 
-`runner_port`
-: Port used by the Pipecat runner and web UI. Default is `7860`.
+`log_level`
+: Application log level.
 
-`satellite_shared_secret`
-: Optional bearer/query token required by `/api/offer`. If set, use
-`?token=<value>` in `PIPECAT_SMALLWEBRTC_URL`.
+## Web UI
 
-`ha_mcp_url`
-: MCP endpoint. Leave empty to use `http://supervisor/core/api/mcp`.
+`Pipelines`
+: Choose, add, duplicate, delete, and edit Pipecat pipelines. Templates include
+realtime, cloud cascade, local-first, and custom flows.
 
-`longlived_token`
-: Optional Home Assistant long-lived access token. Leave empty to use the
-Supervisor token provided by `homeassistant_api: true`.
+`Integrations`
+: Configure cloud providers and local AI endpoints, including OpenAI, Gemini,
+Anthropic, Bedrock, Azure/OpenAI-compatible APIs, Ollama, local runtimes, and
+Home Assistant MCP.
+
+`Runtime`
+: Configure Home Assistant MCP access, the satellite public host, and the
+shared satellite secret.
 
 ## Pipecat ESP32
 

@@ -21,6 +21,8 @@ DEFAULT_INSTRUCTIONS = (
     "device, or action is ambiguous, ask one short clarification."
 )
 
+SECRET_FIELDS = ("api_key", "token", "secret_key", "access_key_id")
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -42,14 +44,185 @@ def _split_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _validate_id(value: str, label: str) -> str:
+    clean = value.strip()
+    if not clean:
+        raise ValueError(f"{label} cannot be empty")
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+    if any(char not in allowed for char in clean):
+        raise ValueError(f"{label} may only contain letters, numbers, _ and -")
+    return clean
+
+
+class IntegrationConfig(BaseModel):
+    """One cloud, local model server, or Home Assistant integration."""
+
+    id: str
+    name: str
+    kind: Literal[
+        "openai",
+        "gemini",
+        "anthropic",
+        "aws_bedrock",
+        "azure_openai",
+        "openai_compatible",
+        "ollama",
+        "local_runtime",
+        "home_assistant_mcp",
+    ]
+    enabled: bool = False
+    api_key: str = ""
+    token: str = ""
+    base_url: str = ""
+    endpoint: str = ""
+    region: str = ""
+    deployment: str = ""
+    default_model: str = ""
+    default_realtime_model: str = ""
+    default_voice: str = ""
+    organization: str = ""
+    project: str = ""
+    access_key_id: str = ""
+    secret_key: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _validate_id(value, "Integration id")
+
+
+class PipelineStepConfig(BaseModel):
+    """One visible step in the pipeline editor."""
+
+    id: str
+    kind: Literal["transport", "vad", "stt", "llm", "tools", "tts", "output"]
+    label: str
+    enabled: bool = True
+    integration_id: str = ""
+    model: str = ""
+    voice: str = ""
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _validate_id(value, "Pipeline step id")
+
+
+def default_integrations() -> list[IntegrationConfig]:
+    """Return first-run integrations shown in the UI."""
+
+    return [
+        IntegrationConfig(
+            id="openai",
+            name="OpenAI",
+            kind="openai",
+            enabled=bool(os.getenv("OPENAI_API_KEY")),
+            api_key=os.getenv("OPENAI_API_KEY", ""),
+            default_model=os.getenv("TEXT_MODEL", "gpt-5.4-mini"),
+            default_realtime_model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
+            default_voice=os.getenv("REALTIME_VOICE", "marin"),
+        ),
+        IntegrationConfig(
+            id="gemini",
+            name="Google Gemini",
+            kind="gemini",
+            enabled=False,
+            default_realtime_model="gemini-2.5-flash-live",
+        ),
+        IntegrationConfig(
+            id="anthropic",
+            name="Anthropic",
+            kind="anthropic",
+            enabled=False,
+            default_model="claude-sonnet-4-5",
+        ),
+        IntegrationConfig(
+            id="bedrock",
+            name="AWS Bedrock",
+            kind="aws_bedrock",
+            enabled=False,
+            region="us-east-1",
+        ),
+        IntegrationConfig(
+            id="openai-compatible",
+            name="OpenAI-compatible",
+            kind="openai_compatible",
+            enabled=False,
+            base_url="http://localhost:8000/v1",
+        ),
+        IntegrationConfig(
+            id="ollama",
+            name="Ollama",
+            kind="ollama",
+            enabled=False,
+            base_url="http://localhost:11434/v1",
+            default_model="llama3.2",
+        ),
+        IntegrationConfig(
+            id="local-runtime",
+            name="Local runtime",
+            kind="local_runtime",
+            enabled=False,
+        ),
+        IntegrationConfig(
+            id="ha-mcp",
+            name="Home Assistant MCP",
+            kind="home_assistant_mcp",
+            enabled=True,
+            base_url=os.getenv("HA_MCP_URL", ""),
+            token=os.getenv("LONGLIVED_TOKEN", ""),
+        ),
+    ]
+
+
+def default_steps() -> list[PipelineStepConfig]:
+    """Return the default visible Pipecat pipeline."""
+
+    return [
+        PipelineStepConfig(id="transport", kind="transport", label="SmallWebRTC"),
+        PipelineStepConfig(
+            id="vad",
+            kind="vad",
+            label="Turn detection",
+            settings={"mode": "semantic_vad", "eagerness": "low"},
+        ),
+        PipelineStepConfig(
+            id="llm",
+            kind="llm",
+            label="Realtime model",
+            integration_id="openai",
+            model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
+        ),
+        PipelineStepConfig(
+            id="tools",
+            kind="tools",
+            label="HA MCP tools",
+            integration_id="ha-mcp",
+        ),
+        PipelineStepConfig(
+            id="output",
+            kind="output",
+            label="Audio output",
+            integration_id="openai",
+            voice=os.getenv("REALTIME_VOICE", "marin"),
+        ),
+    ]
+
+
 class FlowConfig(BaseModel):
-    """One realtime assistant flow."""
+    """One realtime assistant pipeline."""
 
     id: str = "home-default"
     name: str = "Home Assistant realtime"
     enabled: bool = True
-    provider: Literal["openai_realtime"] = "openai_realtime"
+    mode: Literal["realtime", "classic", "text"] = "realtime"
+    pipeline_template: Literal["realtime_home", "cloud_cascade", "local_first", "custom"] = (
+        "realtime_home"
+    )
+    provider_id: str = "openai"
     model: str = "gpt-realtime-2"
+    text_model: str = "gpt-5.4-mini"
     voice: str = "marin"
     speed: float = Field(default=1.0, ge=0.25, le=1.5)
     language: str | None = None
@@ -65,34 +238,35 @@ class FlowConfig(BaseModel):
     mcp_enabled: bool = True
     mcp_tool_allowlist: list[str] = Field(default_factory=list)
     video_enabled: bool = False
+    steps: list[PipelineStepConfig] = Field(default_factory=default_steps)
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, value: str) -> str:
-        clean = value.strip()
-        if not clean:
-            raise ValueError("Flow id cannot be empty")
-        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
-        if any(char not in allowed for char in clean):
-            raise ValueError("Flow id may only contain letters, numbers, _ and -")
-        return clean
+        return _validate_id(value, "Flow id")
+
+    def model_step(self) -> PipelineStepConfig | None:
+        """Return the primary LLM/realtime step."""
+
+        return next((step for step in self.steps if step.kind == "llm" and step.enabled), None)
 
 
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 1
+    version: int = 2
     openai_api_key: str = ""
     text_model: str = "gpt-5.4-mini"
     ha_mcp_url: str = ""
     longlived_token: str = ""
     satellite_shared_secret: str = ""
-    runner_host: str = "0.0.0.0"
+    runner_host: str = ""
     runner_port: int = Field(default=7860, ge=1024, le=65535)
     esp32_mode: bool = False
     enable_default_ice_servers: bool = False
     selected_flow_id: str = "home-default"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    integrations: list[IntegrationConfig] = Field(default_factory=default_integrations)
     flows: list[FlowConfig] = Field(default_factory=lambda: [FlowConfig()])
 
     @field_validator("flows")
@@ -103,6 +277,16 @@ class RuntimeConfig(BaseModel):
         ids = [flow.id for flow in value]
         if len(ids) != len(set(ids)):
             raise ValueError("Flow ids must be unique")
+        return value
+
+    @field_validator("integrations")
+    @classmethod
+    def validate_integrations(cls, value: list[IntegrationConfig]) -> list[IntegrationConfig]:
+        if not value:
+            raise ValueError("At least one integration is required")
+        ids = [integration.id for integration in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Integration ids must be unique")
         return value
 
     def selected_flow(self, requested_flow_id: str | None = None) -> FlowConfig:
@@ -117,17 +301,51 @@ class RuntimeConfig(BaseModel):
                     return flow
         return self.flows[0]
 
+    def integration(self, integration_id: str | None) -> IntegrationConfig | None:
+        """Return an integration by id."""
+
+        if not integration_id:
+            return None
+        return next((item for item in self.integrations if item.id == integration_id), None)
+
+    def model_integration(self, flow: FlowConfig) -> IntegrationConfig | None:
+        """Return the integration used by the primary model step."""
+
+        step = flow.model_step()
+        return self.integration(step.integration_id if step else flow.provider_id)
+
+    @property
+    def mcp_integration(self) -> IntegrationConfig | None:
+        """Return the Home Assistant MCP integration."""
+
+        return next(
+            (item for item in self.integrations if item.kind == "home_assistant_mcp"),
+            None,
+        )
+
     @property
     def effective_mcp_url(self) -> str:
         """Return the MCP URL used by the add-on."""
 
-        return self.ha_mcp_url or os.getenv("HA_MCP_URL") or "http://supervisor/core/api/mcp"
+        integration = self.mcp_integration
+        return (
+            (integration.base_url if integration else "")
+            or self.ha_mcp_url
+            or os.getenv("HA_MCP_URL")
+            or "http://supervisor/core/api/mcp"
+        )
 
     @property
     def effective_mcp_token(self) -> str:
         """Return the Home Assistant token used for MCP."""
 
-        return self.longlived_token or os.getenv("LONGLIVED_TOKEN") or os.getenv("SUPERVISOR_TOKEN", "")
+        integration = self.mcp_integration
+        return (
+            (integration.token if integration else "")
+            or self.longlived_token
+            or os.getenv("LONGLIVED_TOKEN")
+            or os.getenv("SUPERVISOR_TOKEN", "")
+        )
 
     def public_dict(self) -> dict[str, Any]:
         """Return configuration safe enough for the UI."""
@@ -137,17 +355,25 @@ class RuntimeConfig(BaseModel):
             configured = bool(data.get(key))
             data[f"{key}_configured"] = configured
             data[key] = REDACTED if configured else ""
+
+        for integration in data["integrations"]:
+            for key in SECRET_FIELDS:
+                configured = bool(integration.get(key))
+                integration[f"{key}_configured"] = configured
+                integration[key] = REDACTED if configured else ""
+
         data["effective_mcp_url"] = self.effective_mcp_url
         return data
 
 
 def default_config_from_environment() -> RuntimeConfig:
-    """Create the first-run configuration from add-on options."""
+    """Create the first-run configuration from add-on options or environment."""
 
     instructions = os.getenv("INSTRUCTIONS") or DEFAULT_INSTRUCTIONS
     tool_allowlist = _split_csv(os.getenv("MCP_TOOL_ALLOWLIST"))
     flow = FlowConfig(
         model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
+        text_model=os.getenv("TEXT_MODEL", "gpt-5.4-mini"),
         voice=os.getenv("REALTIME_VOICE", "marin"),
         instructions=instructions,
         mcp_tool_allowlist=tool_allowlist,
@@ -158,7 +384,7 @@ def default_config_from_environment() -> RuntimeConfig:
         ha_mcp_url=os.getenv("HA_MCP_URL", ""),
         longlived_token=os.getenv("LONGLIVED_TOKEN", ""),
         satellite_shared_secret=os.getenv("SATELLITE_SHARED_SECRET", ""),
-        runner_host=os.getenv("RUNNER_HOST", "0.0.0.0"),
+        runner_host=os.getenv("RUNNER_HOST", ""),
         runner_port=_env_int("RUNNER_PORT", 7860),
         esp32_mode=_env_bool("ESP32_MODE", False),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -188,14 +414,38 @@ class ConfigStore:
         data.update(raw)
         config = RuntimeConfig.model_validate(data)
 
-        if not config.openai_api_key:
-            config.openai_api_key = default.openai_api_key
-        if not config.longlived_token:
-            config.longlived_token = default.longlived_token
+        changed = False
+        for key in ("runner_port", "esp32_mode", "log_level"):
+            default_value = getattr(default, key)
+            if getattr(config, key) != default_value:
+                setattr(config, key, default_value)
+                changed = True
+
+        openai = config.integration("openai")
+        if config.openai_api_key and openai and not openai.api_key:
+            openai.api_key = config.openai_api_key
+            openai.enabled = True
+            changed = True
+
+        mcp = config.mcp_integration
+        if config.ha_mcp_url and mcp and not mcp.base_url:
+            mcp.base_url = config.ha_mcp_url
+            changed = True
+        if config.longlived_token and mcp and not mcp.token:
+            mcp.token = config.longlived_token
+            changed = True
+
         if not config.satellite_shared_secret:
             config.satellite_shared_secret = (
                 default.satellite_shared_secret or secrets.token_urlsafe(24)
             )
+            changed = True
+
+        if config.version < 2:
+            config.version = 2
+            changed = True
+
+        if changed:
             self.save(config)
         return config
 
@@ -219,7 +469,16 @@ class ConfigStore:
             incoming = payload.get(key)
             if incoming in (None, "", REDACTED):
                 data[key] = getattr(current, key)
+
+        current_integrations = {item.id: item for item in current.integrations}
+        for item in data.get("integrations", []):
+            current_item = current_integrations.get(item.get("id"))
+            if not current_item:
+                continue
+            for key in SECRET_FIELDS:
+                if item.get(key) in (None, "", REDACTED):
+                    item[key] = getattr(current_item, key)
+
         config = RuntimeConfig.model_validate(data)
         self.save(config)
         return config
-

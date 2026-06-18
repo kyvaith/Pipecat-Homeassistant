@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1
+
+- Replaced the original static settings page with a React pipeline editor.
+- Added graphical pipeline templates for realtime, cloud cascade, local-first,
+  and custom flows.
+- Added UI-managed integrations for OpenAI, Gemini, Anthropic, Bedrock, Azure,
+  OpenAI-compatible endpoints, Ollama, local runtimes, and Home Assistant MCP.
+- Moved model, provider, MCP, satellite, and flow settings out of Home
+  Assistant add-on options and into the app UI.
+- Added semver image publishing fixes for Home Assistant Supervisor.
+
 ## 0.1.0
 
 - Initial Pipecat Assist add-on.

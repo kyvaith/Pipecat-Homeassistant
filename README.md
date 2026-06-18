@@ -15,6 +15,8 @@ Assistant MCP server.
 - `addons/pipecat_assist` - the Home Assistant app/add-on. It runs Pipecat,
   exposes a configuration UI through Ingress, serves `/api/offer` for
   Pipecat ESP32 SmallWebRTC clients, and connects to Home Assistant MCP.
+- `addons/pipecat_assist/ui-src` - the React source for the pipeline editor
+  shipped as static assets inside the add-on image.
 - `custom_components/pipecat_assist` - a small Home Assistant conversation
   entity that forwards text requests into the add-on, so existing HA
   conversation entry points can select "Pipecat Realtime".
@@ -51,18 +53,19 @@ flowchart LR
 
 1. Add this repository to Home Assistant as an app/add-on repository.
 2. Install **Pipecat Assist**.
-3. In the add-on configuration set:
-   - `openai_api_key`
-   - `runner_host` to the Home Assistant LAN IP used by ESP32 devices
-   - `satellite_shared_secret` to a long random value
-4. Enable Home Assistant's **Model Context Protocol Server** integration.
-5. Start the add-on and open the web UI.
-6. Build Pipecat ESP32 firmware with the generated
+3. Enable Home Assistant's **Model Context Protocol Server** integration.
+4. Start the add-on and open the web UI.
+5. Configure integrations for Home Assistant MCP and your model providers:
+   OpenAI, Gemini, Anthropic, Bedrock, Azure/OpenAI-compatible endpoints,
+   Ollama, or local runtimes.
+6. Choose or create a pipeline, then configure its model, tools, audio, and
+   satellite settings in the UI.
+7. Build Pipecat ESP32 firmware with the generated
    `PIPECAT_SMALLWEBRTC_URL`.
 
 The add-on uses `SUPERVISOR_TOKEN` when `homeassistant_api: true` is enabled.
 If that token is not accepted by your MCP configuration, use a Home Assistant
-long-lived access token in `longlived_token`.
+long-lived access token in the **Runtime** UI.
 
 ## Pipecat ESP32
 
@@ -84,6 +87,14 @@ The add-on source is in `addons/pipecat_assist`.
 python -m compileall addons/pipecat_assist/app custom_components/pipecat_assist
 ```
 
+For the React UI:
+
+```bash
+cd addons/pipecat_assist/ui-src
+pnpm install
+pnpm build
+```
+
 For a container build:
 
 ```bash
@@ -93,6 +104,8 @@ docker build -t pipecat-assist:dev addons/pipecat_assist
 ## References
 
 - Pipecat: https://github.com/pipecat-ai/pipecat
+- Pipecat Flows: https://github.com/pipecat-ai/pipecat-flows
+- Pipecat Flows Editor: https://github.com/pipecat-ai/pipecat-flows-editor
 - Pipecat logo source: https://github.com/pipecat-ai/voice-ui-kit/blob/main/package/src/components/elements/PipecatLogo.tsx
 - Pipecat ESP32: https://github.com/pipecat-ai/pipecat-esp32
 - Home Assistant MCP server: https://www.home-assistant.io/integrations/mcp_server/

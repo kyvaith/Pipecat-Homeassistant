@@ -9,10 +9,10 @@ htmlcov/
 .env
 .env.*
 !.env.example
+node_modules/
 *.log
 dist/
 build/
 *.egg-info/
 .DS_Store
 Thumbs.db
-

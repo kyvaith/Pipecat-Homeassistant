@@ -54,12 +54,25 @@ async def run_text_conversation(
     """Run a text request through OpenAI with HA MCP tools."""
 
     flow = config.selected_flow(flow_id)
-    if not config.openai_api_key:
+    integration = config.model_integration(flow)
+    provider_kind = integration.kind if integration else "openai"
+    if provider_kind not in {"openai", "openai_compatible", "ollama"}:
         return {
-            "speech": "Pipecat Assist is missing an OpenAI API key.",
+            "speech": "This Pipecat Assist text bridge does not support the selected model provider yet.",
             "conversation_id": conversation_id,
             "continue_conversation": False,
-            "error": "missing_openai_api_key",
+            "error": "unsupported_text_provider",
+        }
+
+    api_key = (integration.api_key if integration else "") or config.openai_api_key
+    if provider_kind == "ollama" and not api_key:
+        api_key = "ollama"
+    if not api_key:
+        return {
+            "speech": "Pipecat Assist is missing an API key for the selected model provider.",
+            "conversation_id": conversation_id,
+            "continue_conversation": False,
+            "error": "missing_provider_api_key",
         }
 
     system = (
@@ -76,7 +89,10 @@ async def run_text_conversation(
         {"role": "user", "content": text},
     ]
 
-    client = AsyncOpenAI(api_key=config.openai_api_key)
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    if integration and integration.base_url and provider_kind in {"openai_compatible", "ollama"}:
+        client_kwargs["base_url"] = integration.base_url
+    client = AsyncOpenAI(**client_kwargs)
     tools: list[dict[str, Any]] = []
 
     bridge: HomeAssistantMCPBridge | None = None
@@ -103,7 +119,9 @@ async def run_text_conversation(
     try:
         for _ in range(6):
             kwargs: dict[str, Any] = {
-                "model": config.text_model,
+                "model": flow.text_model
+                or (integration.default_model if integration else "")
+                or config.text_model,
                 "messages": messages,
             }
             if tools:
@@ -152,4 +170,3 @@ async def run_text_conversation(
     finally:
         if bridge:
             await bridge.close()
-

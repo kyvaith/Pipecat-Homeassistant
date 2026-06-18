@@ -1,41 +1,7 @@
 configuration:
-  openai_api_key:
-    name: OpenAI API key
-    description: API key used by OpenAI Realtime and the text bridge.
-  instructions:
-    name: Assistant instructions
-    description: System instructions shared by the default realtime flow.
-  text_model:
-    name: Text bridge model
-    description: Model used by the Home Assistant Conversation text bridge.
-  realtime_model:
-    name: Realtime model
-    description: Default OpenAI Realtime model for voice sessions.
-  realtime_voice:
-    name: Realtime voice
-    description: Default voice for OpenAI Realtime audio output.
-  runner_host:
-    name: Runner host
-    description: Host passed to Pipecat runner. Use the Home Assistant LAN IP for ESP32 mode.
-  runner_port:
-    name: Runner port
-    description: Port for the UI and SmallWebRTC endpoint.
   esp32_mode:
     name: ESP32 mode
-    description: Enables Pipecat SDP adjustments for ESP32 SmallWebRTC clients.
-  satellite_shared_secret:
-    name: Satellite shared secret
-    description: Optional token required by /api/offer.
-  ha_mcp_url:
-    name: Home Assistant MCP URL
-    description: Leave empty to use http://supervisor/core/api/mcp.
-  longlived_token:
-    name: Home Assistant access token
-    description: Optional long-lived access token. Empty uses SUPERVISOR_TOKEN.
-  mcp_tool_allowlist:
-    name: MCP tool allowlist
-    description: Comma-separated MCP tool names; empty exposes all HA MCP tools.
+    description: Enables Pipecat SDP adjustments at process startup for ESP32 SmallWebRTC clients.
   log_level:
     name: Log level
     description: Application log level.
-
