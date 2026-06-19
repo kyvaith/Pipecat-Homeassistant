@@ -33,7 +33,7 @@ DEFAULT_OPENAI_TTS_VOICE = "marin"
 DEFAULT_CARTESIA_MODEL = "sonic-3.5"
 DEFAULT_CARTESIA_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 DEFAULT_ELEVENLABS_MODEL = "eleven_flash_v2_5"
-DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"
+DEFAULT_ELEVENLABS_VOICE = "Xb7hH8MSUJpSbSDYk0k2"
 DEFAULT_GOOGLE_TTS_VOICE = "en-US-Chirp3-HD-Charon"
 DEFAULT_AWS_NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0"
 DEFAULT_AWS_NOVA_SONIC_VOICE = "matthew"
@@ -974,7 +974,13 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
         if default_model and not integration.default_model:
             integration.default_model = default_model
             changed = True
-        if default_voice and not integration.default_voice:
+        if (
+            integration_id == "elevenlabs"
+            and integration.default_voice in {"", "21m00Tcm4TlvDq8ikWAM"}
+        ):
+            integration.default_voice = DEFAULT_ELEVENLABS_VOICE
+            changed = True
+        elif default_voice and not integration.default_voice:
             integration.default_voice = default_voice
             changed = True
 

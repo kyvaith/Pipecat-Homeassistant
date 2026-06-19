@@ -73,7 +73,7 @@ const OPENAI_TTS_VOICE = "marin";
 const CARTESIA_MODEL = "sonic-3.5";
 const CARTESIA_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02";
 const ELEVENLABS_MODEL = "eleven_flash_v2_5";
-const ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM";
+const ELEVENLABS_VOICE = "Xb7hH8MSUJpSbSDYk0k2";
 const GOOGLE_TTS_VOICE = "en-US-Chirp3-HD-Charon";
 const AWS_NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0";
 const AWS_NOVA_SONIC_VOICE = "matthew";
@@ -1934,6 +1934,7 @@ function AssistantView({ config, flow, status, setTab }) {
   const template = pipelineTemplate(flow);
   const Icon = template.icon || Bot;
   const validation = validatePipeline(config, flow);
+  const showGeminiLiveHint = !hasReadyAssistantSetup(config);
   return (
     <div className="assistant-grid">
       <section className={`assistant-hero ${template.accent || "blue"}`}>
@@ -1945,6 +1946,21 @@ function AssistantView({ config, flow, status, setTab }) {
           <h3>{flow.name}</h3>
           <strong>{validation.ok ? "Ready" : validation.errors[0]}</strong>
         </div>
+        {showGeminiLiveHint && (
+          <div className="setup-callout">
+            <AlertCircle size={20} />
+            <div>
+              <strong>The easiest way to get started is with Gemini Live.</strong>
+              <span>
+                Go to{" "}
+                <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noreferrer">
+                  Google AI Studio
+                </a>{" "}
+                and generate an API key. Then open Integrations and paste it into Google Gemini Live.
+              </span>
+            </div>
+          </div>
+        )}
         <VoiceTest config={config} flow={flow} />
         <div className="assistant-actions">
           <Button icon={Workflow} variant="secondary" onClick={() => setTab("pipelines")}>
@@ -3986,6 +4002,10 @@ function voiceReadiness(config, flow) {
   return { ok: true, detail: `Ready for ${flow.name}.` };
 }
 
+function hasReadyAssistantSetup(config) {
+  return (config.flows || []).some((candidate) => voiceReadiness(config, candidate).ok);
+}
+
 async function offerErrorMessage(response) {
   const body = await response.text();
   let detail = body;
@@ -4137,7 +4157,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.25",
+                library_version: "0.1.26",
                 platform: "browser",
               },
             },

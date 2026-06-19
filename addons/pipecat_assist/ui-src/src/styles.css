@@ -306,6 +306,50 @@ h3 {
   line-height: 1.08;
 }
 
+.setup-callout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  max-width: 760px;
+  border: 1px solid rgba(213, 144, 34, 0.32);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: #55360b;
+  background: #fff6e7;
+}
+
+.setup-callout svg {
+  margin-top: 2px;
+  color: var(--amber);
+}
+
+.setup-callout div {
+  display: grid;
+  gap: 4px;
+}
+
+.setup-callout strong {
+  color: #3a2608;
+  font-size: 14px;
+}
+
+.setup-callout span {
+  color: #6b4c19;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.setup-callout a {
+  color: #245fa8;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.setup-callout a:hover {
+  text-decoration: underline;
+}
+
 .assistant-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1028,6 +1072,24 @@ html[data-theme="dark"] .assistant-hero.amber,
 html[data-theme="dark"] .assistant-hero.mint,
 html[data-theme="dark"] .assistant-hero.rose {
   background: var(--panel);
+}
+
+html[data-theme="dark"] .setup-callout {
+  color: #f5d49b;
+  border-color: rgba(245, 180, 91, 0.35);
+  background: #2b2418;
+}
+
+html[data-theme="dark"] .setup-callout strong {
+  color: #ffe3ad;
+}
+
+html[data-theme="dark"] .setup-callout span {
+  color: #e4c48e;
+}
+
+html[data-theme="dark"] .setup-callout a {
+  color: #9fc8ff;
 }
 
 .state.error {

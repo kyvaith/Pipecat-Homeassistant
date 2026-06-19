@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.26
+
+- Added first-run Gemini Live setup guidance above the assistant voice test
+  when no configured pipeline is ready to run.
+- Changed the default ElevenLabs voice to `Xb7hH8MSUJpSbSDYk0k2` and migrated
+  saved defaults that still used the old built-in voice.
+
 ## 0.1.25
 
 - Moved composed realtime turn detection into an explicit VAD processor before
