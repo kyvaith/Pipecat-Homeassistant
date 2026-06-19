@@ -62,6 +62,7 @@ from app.text_agent import run_text_conversation
 STORE = ConfigStore()
 STARTED_AT = time.time()
 UI_DIR = Path(__file__).parent / "ui"
+UI_CACHE_HEADERS = {"Cache-Control": "no-store"}
 
 app.mount("/assets", StaticFiles(directory=UI_DIR), name="assets")
 
@@ -96,14 +97,14 @@ async def protect_satellite_offer(request: Request, call_next):
 
 @app.get("/", include_in_schema=False)
 async def index():
-    return FileResponse(UI_DIR / "index.html")
+    return FileResponse(UI_DIR / "index.html", headers=UI_CACHE_HEADERS)
 
 
 @app.get("/index.js", include_in_schema=False)
 @app.get("/index.css", include_in_schema=False)
 @app.get("/logo.svg", include_in_schema=False)
 async def ui_asset(request: Request):
-    return FileResponse(UI_DIR / request.url.path.lstrip("/"))
+    return FileResponse(UI_DIR / request.url.path.lstrip("/"), headers=UI_CACHE_HEADERS)
 
 
 def _offer_url(config: RuntimeConfig, request: Request) -> str:
@@ -149,6 +150,28 @@ def _validated_oauth_api_base(value: str, request: Request) -> str:
     if not path.endswith("/api/assist/"):
         path = urljoin(path, "api/assist/")
     return parsed._replace(path=path, params="", query="", fragment="").geturl()
+
+
+def _validated_oauth_return_url(value: str, ha_url: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        return ""
+    parsed = urlparse(candidate)
+    ha = urlparse(ha_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="return_url must be an absolute http(s) URL")
+    if ha.scheme and ha.netloc and (parsed.scheme, parsed.netloc) != (ha.scheme, ha.netloc):
+        raise HTTPException(status_code=400, detail="return_url must use the Home Assistant origin")
+    path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+    return parsed._replace(path=path, params="", query="", fragment="").geturl()
+
+
+async def _complete_oauth(code: str, state: str, error: str = "") -> None:
+    if error:
+        raise RuntimeError(error)
+    if not code or not state:
+        raise RuntimeError("Missing authorization code or state.")
+    await exchange_code(STORE, code=code, state=state)
 
 
 @app.get("/api/assist/status")
@@ -209,8 +232,13 @@ async def api_oauth_start(payload: dict[str, Any], request: Request):
     if not ha_url or not authorize_url:
         raise HTTPException(status_code=400, detail="ha_url and authorize_url are required")
     oauth_api_base = _validated_oauth_api_base(str(payload.get("api_base_url") or ""), request)
-    client_id = urljoin(oauth_api_base, "oauth/client")
-    redirect_uri = urljoin(oauth_api_base, "oauth/callback")
+    return_url = _validated_oauth_return_url(str(payload.get("return_url") or ""), ha_url)
+    if return_url:
+        client_id = return_url
+        redirect_uri = return_url
+    else:
+        client_id = urljoin(oauth_api_base, "oauth/client")
+        redirect_uri = urljoin(oauth_api_base, "oauth/callback")
     token_url = oauth_token_url_for_store(STORE, ha_url, str(payload.get("token_url") or ""))
     auth_url = build_authorize_url(
         authorize_url=authorize_url,
@@ -239,18 +267,8 @@ async def api_oauth_client(request: Request):
 
 @app.get("/api/assist/oauth/callback", include_in_schema=False)
 async def api_oauth_callback(code: str = "", state: str = "", error: str = ""):
-    if error:
-        return HTMLResponse(
-            f"<h1>Pipecat Assist OAuth failed</h1><p>{escape(error)}</p>",
-            status_code=400,
-        )
-    if not code or not state:
-        return HTMLResponse(
-            "<h1>Pipecat Assist OAuth failed</h1><p>Missing authorization code or state.</p>",
-            status_code=400,
-        )
     try:
-        await exchange_code(STORE, code=code, state=state)
+        await _complete_oauth(code, state, error)
     except Exception as err:
         logger.warning("Home Assistant OAuth callback failed: {}", err)
         return HTMLResponse(
@@ -261,6 +279,24 @@ async def api_oauth_callback(code: str = "", state: str = "", error: str = ""):
         "<h1>Pipecat Assist is connected</h1>"
         "<p>Home Assistant OAuth is configured. You can close this tab and return to Pipecat Assist.</p>"
     )
+
+
+@app.post("/api/assist/oauth/complete")
+async def api_oauth_complete(payload: dict[str, Any], request: Request):
+    try:
+        await _complete_oauth(
+            code=str(payload.get("code") or ""),
+            state=str(payload.get("state") or ""),
+            error=str(payload.get("error") or ""),
+        )
+    except Exception as err:
+        logger.warning("Home Assistant OAuth completion failed: {}", err)
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    config = STORE.load()
+    data = config.public_dict()
+    data["runner_offer_url"] = _offer_url(config, request)
+    data["runner_offer_path"] = _offer_path(config)
+    return data
 
 
 @app.post("/api/assist/oauth/disconnect")

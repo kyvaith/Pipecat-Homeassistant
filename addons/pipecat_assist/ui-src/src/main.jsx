@@ -27,7 +27,14 @@ import {
 import "./styles.css";
 
 function documentBaseUrl() {
-  const script = [...document.scripts].find((item) => item.src && item.src.endsWith("/index.js"));
+  const script = [...document.scripts].find((item) => {
+    if (!item.src) return false;
+    try {
+      return new URL(item.src).pathname.endsWith("/index.js");
+    } catch {
+      return false;
+    }
+  });
   return script ? new URL("./", script.src).href : new URL("./", window.location.href).href;
 }
 
@@ -40,6 +47,7 @@ const API = {
   status: appUrl("api/assist/status"),
   mcp: appUrl("api/assist/mcp/check"),
   oauthStart: appUrl("api/assist/oauth/start"),
+  oauthComplete: appUrl("api/assist/oauth/complete"),
   oauthDisconnect: appUrl("api/assist/oauth/disconnect"),
 };
 
@@ -288,7 +296,7 @@ function secretPlaceholder(item, key, fallback = "") {
   return secretStatus(item, key) === "configured" ? "configured" : fallback;
 }
 
-function currentVisibleUrl() {
+function visibleHrefCandidates() {
   const candidates = [];
   for (const frame of [window.top, window.parent, window]) {
     try {
@@ -299,7 +307,11 @@ function currentVisibleUrl() {
       // Cross-origin frames cannot be inspected; the current frame remains valid.
     }
   }
+  return candidates.length ? candidates : [window.location.href];
+}
 
+function currentVisibleUrl() {
+  const candidates = visibleHrefCandidates();
   const href = candidates.find((item) => new URL(item).pathname.startsWith("/app/")) || window.location.href;
   const url = new URL(href);
   url.hash = "";
@@ -312,6 +324,52 @@ function currentVisibleUrl() {
 
 function oauthApiBaseUrl() {
   return appUrl("api/assist/");
+}
+
+function oauthCallbackPayloadFromUrl() {
+  for (const href of visibleHrefCandidates()) {
+    const url = new URL(href);
+    const code = url.searchParams.get("code") || "";
+    const state = url.searchParams.get("state") || "";
+    const error = url.searchParams.get("error") || "";
+    if (error || (code && state)) {
+      return { code, state, error };
+    }
+  }
+  return null;
+}
+
+function clearOAuthCallbackParams() {
+  for (const frame of [window.top, window.parent, window]) {
+    try {
+      if (!frame?.location?.href || frame.location.origin !== window.location.origin) continue;
+      const url = new URL(frame.location.href);
+      let changed = false;
+      for (const key of ["code", "state", "error", "error_description", "storeToken"]) {
+        if (url.searchParams.has(key)) {
+          url.searchParams.delete(key);
+          changed = true;
+        }
+      }
+      if (changed) {
+        frame.history.replaceState(frame.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+    } catch {
+      // Ignore frames that cannot be inspected or updated.
+    }
+  }
+}
+
+function navigateVisibleWindow(url) {
+  try {
+    if (window.top?.location?.origin === window.location.origin) {
+      window.top.location.assign(url);
+      return;
+    }
+  } catch {
+    // Fall back to the current frame below.
+  }
+  window.location.assign(url);
 }
 
 function integrationSummary(integration) {
@@ -375,10 +433,22 @@ function App() {
   const [message, setMessage] = useState({ text: "", tone: "" });
   const [fatalError, setFatalError] = useState("");
   const [saving, setSaving] = useState(false);
+  const oauthCompletionStarted = useRef(false);
 
   useEffect(() => {
     load().catch((err) => setFatalError(String(err)));
   }, []);
+
+  useEffect(() => {
+    if (!config || oauthCompletionStarted.current) return;
+    const payload = oauthCallbackPayloadFromUrl();
+    if (!payload) return;
+    oauthCompletionStarted.current = true;
+    completeMcpOAuth(payload).catch((err) => {
+      clearOAuthCallbackParams();
+      setMessage({ text: String(err), tone: "error" });
+    });
+  }, [config]);
 
   const selectedFlow = useMemo(() => {
     if (!config) return null;
@@ -604,6 +674,22 @@ function App() {
     );
   }
 
+  async function completeMcpOAuth(payload) {
+    setMessage({ text: "Completing Home Assistant OAuth", tone: "" });
+    const response = await fetch(API.oauthComplete, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    clearOAuthCallbackParams();
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || "Home Assistant OAuth completion failed");
+    }
+    setConfig(ensureShape(await response.json()));
+    setMessage({ text: "Home Assistant OAuth connected", tone: "ok" });
+  }
+
   async function startMcpOAuth() {
     const authorizeUrl = new URL("/auth/authorize", window.location.origin).href;
     const response = await fetch(API.oauthStart, {
@@ -621,7 +707,7 @@ function App() {
       return;
     }
     const result = await response.json();
-    window.location.assign(result.auth_url);
+    navigateVisibleWindow(result.auth_url);
   }
 
   async function disconnectMcpOAuth() {
@@ -1507,7 +1593,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.9",
+                library_version: "0.1.10",
                 platform: "browser",
               },
             },

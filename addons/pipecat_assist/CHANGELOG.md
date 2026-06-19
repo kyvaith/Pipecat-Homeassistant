@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.10
+
+- Changed Home Assistant OAuth to redirect back to the stable add-on panel URL
+  instead of the temporary Ingress API path.
+- Added in-panel OAuth completion so the browser can pass the authorization
+  code back to the add-on API after Home Assistant redirects to `/app/...`.
+- Added UI asset cache-busting for the bundled React entrypoint and stylesheet.
+
 ## 0.1.9
 
 - Moved Home Assistant OAuth client ID generation to a dedicated add-on
