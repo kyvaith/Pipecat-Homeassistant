@@ -27,6 +27,19 @@ DEFAULT_GEMINI_LIVE_VOICE = "Charon"
 DEFAULT_OPENAI_TEXT_MODEL = "gpt-5.4-mini"
 DEFAULT_OPENAI_REALTIME_MODEL = "gpt-realtime-2"
 DEFAULT_OPENAI_REALTIME_VOICE = "marin"
+DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
+DEFAULT_OPENAI_TTS_VOICE = "marin"
+DEFAULT_CARTESIA_MODEL = "sonic-3.5"
+DEFAULT_CARTESIA_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+DEFAULT_ELEVENLABS_MODEL = "eleven_flash_v2_5"
+DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"
+DEFAULT_GOOGLE_TTS_VOICE = "en-US-Chirp3-HD-Charon"
+DEFAULT_AWS_NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0"
+DEFAULT_AWS_NOVA_SONIC_VOICE = "matthew"
+DEFAULT_AWS_BEDROCK_MODEL = "amazon.nova-pro-v1:0"
+DEFAULT_DEEPGRAM_MODEL = "nova-3"
+DEFAULT_SONIOX_MODEL = "stt-rt-v5"
+DEFAULT_SPEECHMATICS_MODEL = "enhanced"
 OPENAI_REALTIME_VOICES = {
     "alloy",
     "ash",
@@ -43,6 +56,7 @@ DEFAULT_MCP_URL = "http://supervisor/core/api/mcp"
 SECRET_FIELDS = (
     "api_key",
     "token",
+    "credentials_json",
     "secret_key",
     "access_key_id",
 )
@@ -91,8 +105,16 @@ class IntegrationConfig(BaseModel):
     kind: Literal[
         "openai",
         "gemini",
+        "google_cloud_tts",
+        "soniox",
+        "deepgram",
+        "cartesia",
+        "gradium",
+        "speechmatics",
+        "elevenlabs",
         "anthropic",
         "aws_bedrock",
+        "aws_nova_sonic",
         "azure_openai",
         "openai_compatible",
         "ollama",
@@ -111,6 +133,9 @@ class IntegrationConfig(BaseModel):
     default_voice: str = ""
     organization: str = ""
     project: str = ""
+    location: str = ""
+    credentials_json: str = ""
+    credentials_path: str = ""
     access_key_id: str = ""
     secret_key: str = ""
 
@@ -124,7 +149,7 @@ class PipelineStepConfig(BaseModel):
     """One visible step in the pipeline editor."""
 
     id: str
-    kind: Literal["transport", "vad", "stt", "llm", "tools", "tts", "output"]
+    kind: Literal["transport", "vad", "stt", "llm", "tools", "flow", "tts", "output"]
     label: str
     enabled: bool = True
     integration_id: str = ""
@@ -163,6 +188,68 @@ def default_integrations() -> list[IntegrationConfig]:
             default_voice=os.getenv("REALTIME_VOICE", DEFAULT_OPENAI_REALTIME_VOICE),
         ),
         IntegrationConfig(
+            id="google-cloud-tts",
+            name="Google Cloud TTS",
+            kind="google_cloud_tts",
+            enabled=bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS")),
+            credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS", ""),
+            location=os.getenv("GOOGLE_CLOUD_TTS_LOCATION", ""),
+            default_model="google-tts",
+            default_voice=os.getenv("GOOGLE_TTS_VOICE", DEFAULT_GOOGLE_TTS_VOICE),
+        ),
+        IntegrationConfig(
+            id="soniox",
+            name="Soniox",
+            kind="soniox",
+            enabled=bool(os.getenv("SONIOX_API_KEY")),
+            api_key=os.getenv("SONIOX_API_KEY", ""),
+            default_model=os.getenv("SONIOX_STT_MODEL", DEFAULT_SONIOX_MODEL),
+            default_voice=os.getenv("SONIOX_TTS_VOICE", ""),
+        ),
+        IntegrationConfig(
+            id="deepgram",
+            name="Deepgram",
+            kind="deepgram",
+            enabled=bool(os.getenv("DEEPGRAM_API_KEY")),
+            api_key=os.getenv("DEEPGRAM_API_KEY", ""),
+            default_model=os.getenv("DEEPGRAM_STT_MODEL", DEFAULT_DEEPGRAM_MODEL),
+        ),
+        IntegrationConfig(
+            id="cartesia",
+            name="Cartesia",
+            kind="cartesia",
+            enabled=bool(os.getenv("CARTESIA_API_KEY")),
+            api_key=os.getenv("CARTESIA_API_KEY", ""),
+            default_model=os.getenv("CARTESIA_TTS_MODEL", DEFAULT_CARTESIA_MODEL),
+            default_voice=os.getenv("CARTESIA_TTS_VOICE", DEFAULT_CARTESIA_VOICE),
+        ),
+        IntegrationConfig(
+            id="gradium",
+            name="Gradium",
+            kind="gradium",
+            enabled=bool(os.getenv("GRADIUM_API_KEY")),
+            api_key=os.getenv("GRADIUM_API_KEY", ""),
+            default_model=os.getenv("GRADIUM_TTS_MODEL", ""),
+            default_voice=os.getenv("GRADIUM_TTS_VOICE", ""),
+        ),
+        IntegrationConfig(
+            id="speechmatics",
+            name="Speechmatics",
+            kind="speechmatics",
+            enabled=bool(os.getenv("SPEECHMATICS_API_KEY")),
+            api_key=os.getenv("SPEECHMATICS_API_KEY", ""),
+            default_model=os.getenv("SPEECHMATICS_STT_MODEL", DEFAULT_SPEECHMATICS_MODEL),
+        ),
+        IntegrationConfig(
+            id="elevenlabs",
+            name="ElevenLabs",
+            kind="elevenlabs",
+            enabled=bool(os.getenv("ELEVENLABS_API_KEY")),
+            api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+            default_model=os.getenv("ELEVENLABS_TTS_MODEL", DEFAULT_ELEVENLABS_MODEL),
+            default_voice=os.getenv("ELEVENLABS_TTS_VOICE", DEFAULT_ELEVENLABS_VOICE),
+        ),
+        IntegrationConfig(
             id="anthropic",
             name="Anthropic",
             kind="anthropic",
@@ -175,6 +262,16 @@ def default_integrations() -> list[IntegrationConfig]:
             kind="aws_bedrock",
             enabled=False,
             region="us-east-1",
+            default_model=DEFAULT_AWS_BEDROCK_MODEL,
+        ),
+        IntegrationConfig(
+            id="aws-nova-sonic",
+            name="AWS Nova Sonic",
+            kind="aws_nova_sonic",
+            enabled=False,
+            region="us-east-1",
+            default_realtime_model=DEFAULT_AWS_NOVA_SONIC_MODEL,
+            default_voice=DEFAULT_AWS_NOVA_SONIC_VOICE,
         ),
         IntegrationConfig(
             id="openai-compatible",
@@ -233,6 +330,12 @@ def default_steps() -> list[PipelineStepConfig]:
             integration_id="ha-mcp",
         ),
         PipelineStepConfig(
+            id="flow",
+            kind="flow",
+            label="Conversation flow",
+            enabled=False,
+        ),
+        PipelineStepConfig(
             id="output",
             kind="output",
             label="Native audio",
@@ -242,16 +345,89 @@ def default_steps() -> list[PipelineStepConfig]:
     ]
 
 
+def default_conversation_flow() -> dict[str, Any]:
+    """Return a starter Pipecat Flows graph for composed realtime pipelines."""
+
+    return {
+        "enabled": False,
+        "initial_node_id": "home_router",
+        "nodes": [
+            {
+                "id": "home_router",
+                "label": "Home router",
+                "role_message": DEFAULT_INSTRUCTIONS,
+                "task": (
+                    "Answer normal smart-home requests. If the user wants to order pizza, "
+                    "call start_pizza_order."
+                ),
+                "functions": [
+                    {
+                        "name": "start_pizza_order",
+                        "description": "Start a guided pizza ordering conversation.",
+                        "properties": {},
+                        "required": [],
+                        "next_node_id": "pizza_order",
+                    }
+                ],
+            },
+            {
+                "id": "pizza_order",
+                "label": "Pizza order",
+                "role_message": (
+                    "You collect pizza order details. Ask only for missing information. "
+                    "Confirm before placing the order."
+                ),
+                "task": "Collect size, toppings, delivery details, and confirmation.",
+                "functions": [
+                    {
+                        "name": "place_pizza_order",
+                        "description": (
+                            "Place the pizza order through a Home Assistant MCP tool after "
+                            "the user has confirmed all details."
+                        ),
+                        "properties": {
+                            "size": {"type": "string", "description": "Pizza size"},
+                            "toppings": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Requested toppings",
+                            },
+                            "address": {"type": "string", "description": "Delivery address"},
+                            "notes": {"type": "string", "description": "Optional order notes"},
+                        },
+                        "required": ["size", "toppings"],
+                        "mcp_tool": "",
+                        "next_node_id": "done",
+                    }
+                ],
+            },
+            {
+                "id": "done",
+                "label": "Done",
+                "role_message": DEFAULT_INSTRUCTIONS,
+                "task": "Briefly confirm the result and end the conversation.",
+                "post_actions": [{"type": "end_conversation"}],
+            },
+        ],
+    }
+
+
 class FlowConfig(BaseModel):
     """One realtime assistant pipeline."""
 
     id: str = "home-default"
     name: str = "Gemini Live Home Assistant"
     enabled: bool = True
-    mode: Literal["realtime", "classic", "text"] = "realtime"
+    mode: Literal["realtime", "composed", "classic", "text"] = "realtime"
     pipeline_template: Literal[
         "realtime_home",
         "gemini_live_home",
+        "aws_nova_sonic",
+        "soniox_openai_cartesia",
+        "soniox_openai_gradium",
+        "deepgram_gemini_google_tts",
+        "deepgram_google_google_tts",
+        "speechmatics_aws_elevenlabs",
         "cloud_cascade",
         "local_first",
         "custom",
@@ -275,6 +451,7 @@ class FlowConfig(BaseModel):
     mcp_tool_allowlist: list[str] = Field(default_factory=list)
     video_enabled: bool = False
     steps: list[PipelineStepConfig] = Field(default_factory=default_steps)
+    conversation_flow: dict[str, Any] = Field(default_factory=default_conversation_flow)
 
     @field_validator("id")
     @classmethod
@@ -290,7 +467,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 7
+    version: int = 8
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -520,6 +697,9 @@ def _flow_output_step(flow: FlowConfig) -> PipelineStepConfig | None:
 def _repair_flow_provider_model(config: RuntimeConfig, flow: FlowConfig) -> bool:
     """Clear stale cross-provider realtime settings left by older UI template switches."""
 
+    if flow.mode in {"composed", "classic"}:
+        return False
+
     model_step = flow.model_step()
     integration_id = (
         model_step.integration_id if model_step and model_step.integration_id else flow.provider_id
@@ -615,6 +795,53 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
             openai.default_voice = os.getenv("REALTIME_VOICE", DEFAULT_OPENAI_REALTIME_VOICE)
             changed = True
 
+    google_tts = config.integration("google-cloud-tts")
+    if google_tts:
+        if not google_tts.default_voice:
+            google_tts.default_voice = os.getenv("GOOGLE_TTS_VOICE", DEFAULT_GOOGLE_TTS_VOICE)
+            changed = True
+        if not google_tts.credentials_path and os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+            google_tts.credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+            google_tts.enabled = True
+            changed = True
+
+    provider_defaults = {
+        "soniox": ("SONIOX_API_KEY", DEFAULT_SONIOX_MODEL, ""),
+        "deepgram": ("DEEPGRAM_API_KEY", DEFAULT_DEEPGRAM_MODEL, ""),
+        "cartesia": ("CARTESIA_API_KEY", DEFAULT_CARTESIA_MODEL, DEFAULT_CARTESIA_VOICE),
+        "gradium": ("GRADIUM_API_KEY", "", ""),
+        "speechmatics": ("SPEECHMATICS_API_KEY", DEFAULT_SPEECHMATICS_MODEL, ""),
+        "elevenlabs": ("ELEVENLABS_API_KEY", DEFAULT_ELEVENLABS_MODEL, DEFAULT_ELEVENLABS_VOICE),
+    }
+    for integration_id, (env_key, default_model, default_voice) in provider_defaults.items():
+        integration = config.integration(integration_id)
+        if not integration:
+            continue
+        if os.getenv(env_key) and not integration.api_key:
+            integration.api_key = os.getenv(env_key, "")
+            integration.enabled = True
+            changed = True
+        if default_model and not integration.default_model:
+            integration.default_model = default_model
+            changed = True
+        if default_voice and not integration.default_voice:
+            integration.default_voice = default_voice
+            changed = True
+
+    bedrock = config.integration("bedrock")
+    if bedrock and not bedrock.default_model:
+        bedrock.default_model = DEFAULT_AWS_BEDROCK_MODEL
+        changed = True
+
+    nova_sonic = config.integration("aws-nova-sonic")
+    if nova_sonic:
+        if not nova_sonic.default_realtime_model:
+            nova_sonic.default_realtime_model = DEFAULT_AWS_NOVA_SONIC_MODEL
+            changed = True
+        if not nova_sonic.default_voice:
+            nova_sonic.default_voice = DEFAULT_AWS_NOVA_SONIC_VOICE
+            changed = True
+
     return changed
 
 
@@ -708,6 +935,31 @@ class ConfigStore:
 
         if config.version < 7:
             config.version = 7
+            changed = True
+
+        if config.version < 8:
+            config.version = 8
+            for flow in config.flows:
+                if "enabled" not in flow.conversation_flow:
+                    flow.conversation_flow = default_conversation_flow()
+                if not any(step.kind == "flow" for step in flow.steps):
+                    output_index = next(
+                        (
+                            index
+                            for index, step in enumerate(flow.steps)
+                            if step.kind in {"tts", "output"}
+                        ),
+                        len(flow.steps),
+                    )
+                    flow.steps.insert(
+                        output_index,
+                        PipelineStepConfig(
+                            id="flow",
+                            kind="flow",
+                            label="Conversation flow",
+                            enabled=False,
+                        ),
+                    )
             changed = True
 
         for flow in config.flows:

@@ -14,7 +14,7 @@ There are two useful test paths:
 
 ## Requirements
 
-- Pipecat Assist 0.1.16 or newer.
+- Pipecat Assist 0.1.17 or newer.
 - Home Assistant with the Model Context Protocol Server integration enabled.
 - A Google AI Studio API key with access to the Gemini Live API.
 - The `custom_components/pipecat_assist` integration installed if you want to
@@ -26,7 +26,7 @@ the add-on image includes `pipecat-ai[google]`.
 
 ## Configure The Add-On
 
-1. Update Pipecat Assist to version 0.1.16 or newer.
+1. Update Pipecat Assist to version 0.1.17 or newer.
 2. Start the add-on and open the Pipecat Assist web UI.
 3. In Home Assistant, enable **Model Context Protocol Server**.
 4. Open **Runtime > Home Assistant**:
@@ -54,10 +54,10 @@ the add-on image includes `pipecat-ai[google]`.
 
 ## Test Realtime Voice In The Add-On UI
 
-The Runtime page includes a browser-based SmallWebRTC tester. It uses the
+The Assistant page includes a browser-based SmallWebRTC tester. It uses the
 currently selected pipeline and the same `/api/offer` route as Pipecat ESP32.
 
-1. Open **Runtime > Voice test**.
+1. Open **Assistant**.
 2. Click **Start voice test**.
 3. Allow microphone access in the browser.
 4. Wait until the state changes to **Connected**.

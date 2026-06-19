@@ -49,6 +49,8 @@ const API = {
   mcp: appUrl("api/assist/mcp/check"),
   mcpReset: appUrl("api/assist/mcp/reset"),
   audioDebug: appUrl("api/assist/debug/audio"),
+  models: (integrationId, capability = "llm") =>
+    appUrl(`api/assist/integrations/${encodeURIComponent(integrationId)}/models?capability=${encodeURIComponent(capability)}`),
 };
 
 const REDACTED = "__redacted__";
@@ -58,6 +60,19 @@ const GEMINI_LIVE_VOICE = "Charon";
 const OPENAI_TEXT_MODEL = "gpt-5.4-mini";
 const OPENAI_REALTIME_MODEL = "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = "marin";
+const OPENAI_TTS_MODEL = "gpt-4o-mini-tts";
+const OPENAI_TTS_VOICE = "marin";
+const CARTESIA_MODEL = "sonic-3.5";
+const CARTESIA_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02";
+const ELEVENLABS_MODEL = "eleven_flash_v2_5";
+const ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM";
+const GOOGLE_TTS_VOICE = "en-US-Chirp3-HD-Charon";
+const AWS_NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0";
+const AWS_NOVA_SONIC_VOICE = "matthew";
+const AWS_BEDROCK_MODEL = "amazon.nova-pro-v1:0";
+const DEEPGRAM_MODEL = "nova-3";
+const SONIOX_MODEL = "stt-rt-v5";
+const SPEECHMATICS_MODEL = "enhanced";
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -74,8 +89,16 @@ const OPENAI_REALTIME_VOICES = [
 const providerKinds = [
   ["openai", "OpenAI", Cloud],
   ["gemini", "Gemini", Cloud],
+  ["google_cloud_tts", "Google Cloud TTS", Cloud],
+  ["soniox", "Soniox", Cloud],
+  ["deepgram", "Deepgram", Cloud],
+  ["cartesia", "Cartesia", Cloud],
+  ["gradium", "Gradium", Cloud],
+  ["speechmatics", "Speechmatics", Cloud],
+  ["elevenlabs", "ElevenLabs", Cloud],
   ["anthropic", "Anthropic", Cloud],
   ["aws_bedrock", "Bedrock", Cloud],
+  ["aws_nova_sonic", "AWS Nova Sonic", Radio],
   ["azure_openai", "Azure OpenAI", Cloud],
   ["openai_compatible", "OpenAI-compatible", Server],
   ["ollama", "Ollama", Cpu],
@@ -91,6 +114,7 @@ const stepTypes = [
   ["stt", "STT", Mic2],
   ["llm", "Model", Bot],
   ["tools", "Tools", Wrench],
+  ["flow", "Pipecat Flow", Workflow],
   ["tts", "TTS", Volume2],
   ["output", "Output", Volume2],
 ];
@@ -100,6 +124,7 @@ const templates = [
     id: "gemini_live_home",
     label: "Gemini Live",
     icon: Cloud,
+    group: "Speech-to-speech",
     mode: "realtime",
     provider: "gemini",
     accent: "blue",
@@ -108,13 +133,15 @@ const templates = [
       ["vad", "vad", "Gemini VAD", ""],
       ["llm", "llm", "Live model", "gemini"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Conversation router", ""],
       ["output", "output", "Native audio", "gemini"],
     ],
   },
   {
     id: "realtime_home",
-    label: "Realtime Home",
+    label: "OpenAI Realtime",
     icon: Radio,
+    group: "Speech-to-speech",
     mode: "realtime",
     provider: "openai",
     accent: "green",
@@ -123,14 +150,123 @@ const templates = [
       ["vad", "vad", "Semantic VAD", ""],
       ["llm", "llm", "Realtime model", "openai"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Conversation router", ""],
       ["output", "output", "Audio output", "openai"],
     ],
   },
   {
+    id: "aws_nova_sonic",
+    label: "AWS Nova Sonic",
+    icon: Radio,
+    group: "Speech-to-speech",
+    mode: "realtime",
+    provider: "aws-nova-sonic",
+    accent: "amber",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Nova Sonic VAD", ""],
+      ["llm", "llm", "Nova Sonic", "aws-nova-sonic"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Conversation router", ""],
+      ["output", "output", "Native audio", "aws-nova-sonic"],
+    ],
+  },
+  {
+    id: "soniox_openai_cartesia",
+    label: "Soniox + OpenAI + Cartesia",
+    icon: Workflow,
+    group: "Composed realtime",
+    mode: "composed",
+    provider: "openai",
+    accent: "mint",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["stt", "stt", "Soniox STT", "soniox"],
+      ["llm", "llm", "OpenAI LLM", "openai"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
+      ["tts", "tts", "Cartesia TTS", "cartesia"],
+      ["output", "output", "Audio output", ""],
+    ],
+  },
+  {
+    id: "soniox_openai_gradium",
+    label: "Soniox + OpenAI + Gradium",
+    icon: Workflow,
+    group: "Composed realtime",
+    mode: "composed",
+    provider: "openai",
+    accent: "mint",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["stt", "stt", "Soniox STT", "soniox"],
+      ["llm", "llm", "OpenAI LLM", "openai"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
+      ["tts", "tts", "Gradium TTS", "gradium"],
+      ["output", "output", "Audio output", ""],
+    ],
+  },
+  {
+    id: "deepgram_gemini_google_tts",
+    label: "Deepgram + Gemini + Google TTS",
+    icon: Workflow,
+    group: "Composed realtime",
+    mode: "composed",
+    provider: "gemini",
+    accent: "blue",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["stt", "stt", "Deepgram STT", "deepgram"],
+      ["llm", "llm", "Gemini LLM", "gemini"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
+      ["tts", "tts", "Google TTS Chirp 3", "google-cloud-tts"],
+      ["output", "output", "Audio output", ""],
+    ],
+  },
+  {
+    id: "deepgram_google_google_tts",
+    label: "Deepgram + Google + Google TTS",
+    icon: Workflow,
+    group: "Composed realtime",
+    mode: "composed",
+    provider: "gemini",
+    accent: "blue",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["stt", "stt", "Deepgram STT", "deepgram"],
+      ["llm", "llm", "Google LLM", "gemini"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
+      ["tts", "tts", "Google TTS Chirp 3", "google-cloud-tts"],
+      ["output", "output", "Audio output", ""],
+    ],
+  },
+  {
+    id: "speechmatics_aws_elevenlabs",
+    label: "Speechmatics + AWS + ElevenLabs",
+    icon: Workflow,
+    group: "Composed realtime",
+    mode: "composed",
+    provider: "bedrock",
+    accent: "rose",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["stt", "stt", "Speechmatics STT", "speechmatics"],
+      ["llm", "llm", "AWS Nova Pro", "bedrock"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
+      ["tts", "tts", "ElevenLabs TTS", "elevenlabs"],
+      ["output", "output", "Audio output", ""],
+    ],
+  },
+  {
     id: "cloud_cascade",
-    label: "Cloud Cascade",
+    label: "Cloud Custom",
     icon: Cloud,
-    mode: "classic",
+    group: "Custom",
+    mode: "composed",
     provider: "gemini",
     accent: "blue",
     steps: [
@@ -138,6 +274,7 @@ const templates = [
       ["stt", "stt", "Cloud STT", "gemini"],
       ["llm", "llm", "Cloud LLM", "gemini"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Cloud TTS", "gemini"],
       ["output", "output", "Audio output", ""],
     ],
@@ -146,7 +283,8 @@ const templates = [
     id: "local_first",
     label: "Local First",
     icon: Cpu,
-    mode: "classic",
+    group: "Local",
+    mode: "composed",
     provider: "ollama",
     accent: "amber",
     steps: [
@@ -155,6 +293,7 @@ const templates = [
       ["stt", "stt", "Local STT", "local-runtime"],
       ["llm", "llm", "Local LLM", "ollama"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Local TTS", "local-runtime"],
       ["output", "output", "Audio output", ""],
     ],
@@ -163,7 +302,8 @@ const templates = [
     id: "custom",
     label: "Custom",
     icon: GitBranch,
-    mode: "classic",
+    group: "Custom",
+    mode: "composed",
     provider: "openai-compatible",
     accent: "red",
     steps: [],
@@ -196,6 +336,56 @@ const defaultFlow = {
   mcp_tool_allowlist: [],
   video_enabled: false,
   steps: [],
+  conversation_flow: {
+    enabled: false,
+    initial_node_id: "home_router",
+    nodes: [
+      {
+        id: "home_router",
+        label: "Home router",
+        role_message:
+          "You are a realtime Home Assistant voice agent. Speak naturally and briefly. Use Home Assistant MCP tools only when the user clearly asks to control, inspect, or automate the home.",
+        task: "Handle normal smart-home requests. If the user wants to order pizza, call start_pizza_order.",
+        functions: [
+          {
+            name: "start_pizza_order",
+            description: "Start a guided pizza ordering conversation.",
+            properties: {},
+            required: [],
+            next_node_id: "pizza_order",
+          },
+        ],
+      },
+      {
+        id: "pizza_order",
+        label: "Pizza order",
+        role_message: "Collect pizza order details, confirm them, then call the configured Home Assistant MCP tool.",
+        task: "Collect size, toppings, delivery details, and confirmation.",
+        functions: [
+          {
+            name: "place_pizza_order",
+            description: "Place the pizza order through Home Assistant MCP after confirmation.",
+            properties: {
+              size: { type: "string", description: "Pizza size" },
+              toppings: { type: "array", items: { type: "string" }, description: "Requested toppings" },
+              address: { type: "string", description: "Delivery address" },
+              notes: { type: "string", description: "Optional notes" },
+            },
+            required: ["size", "toppings"],
+            mcp_tool: "",
+            next_node_id: "done",
+          },
+        ],
+      },
+      {
+        id: "done",
+        label: "Done",
+        role_message: "Speak briefly and naturally.",
+        task: "Confirm the result and end the conversation.",
+        post_actions: [{ type: "end_conversation" }],
+      },
+    ],
+  },
 };
 
 function slugify(value) {
@@ -238,7 +428,35 @@ function providerDefaults(provider) {
       voice: OPENAI_REALTIME_VOICE,
     };
   }
+  if (provider === "aws-nova-sonic" || provider === "aws_nova_sonic") {
+    return { model: AWS_NOVA_SONIC_MODEL, text_model: AWS_BEDROCK_MODEL, voice: AWS_NOVA_SONIC_VOICE };
+  }
+  if (provider === "bedrock" || provider === "aws_bedrock") {
+    return { model: AWS_BEDROCK_MODEL, text_model: AWS_BEDROCK_MODEL, voice: "" };
+  }
+  if (provider === "soniox") return { model: SONIOX_MODEL, text_model: "", voice: "" };
+  if (provider === "deepgram") return { model: DEEPGRAM_MODEL, text_model: "", voice: "" };
+  if (provider === "cartesia") return { model: CARTESIA_MODEL, text_model: "", voice: CARTESIA_VOICE };
+  if (provider === "elevenlabs") return { model: ELEVENLABS_MODEL, text_model: "", voice: ELEVENLABS_VOICE };
+  if (provider === "google-cloud-tts" || provider === "google_cloud_tts") {
+    return { model: "google-tts", text_model: "", voice: GOOGLE_TTS_VOICE };
+  }
+  if (provider === "speechmatics") return { model: SPEECHMATICS_MODEL, text_model: "", voice: "" };
+  if (provider === "openai_compatible") return { model: "", text_model: "", voice: "" };
   return {};
+}
+
+function integrationDefaults(config, integrationId) {
+  const integration = config?.integrations?.find(
+    (item) => item.id === integrationId || item.kind === integrationId,
+  );
+  const fallback = providerDefaults(integrationId);
+  return {
+    model: integration?.default_realtime_model || integration?.default_model || fallback.model || "",
+    text_model: integration?.default_model || fallback.text_model || "",
+    voice: integration?.default_voice || fallback.voice || "",
+    kind: integration?.kind || integrationId || "",
+  };
 }
 
 function providerKindForIntegration(config, integrationId) {
@@ -264,23 +482,52 @@ function realtimeVoiceMatchesProvider(provider, voice) {
   return true;
 }
 
-function stepsFromTemplate(template) {
-  return template.steps.map(([id, kind, label, integrationId]) => ({
-    ...makeStep(kind, label, integrationId, id),
-    id,
-  }));
+function stepDefaults(config, integrationId, kind, mode) {
+  const integration = config?.integrations?.find((item) => item.id === integrationId || item.kind === integrationId);
+  const fallback = providerDefaults(integrationId);
+  if (!integration) return fallback;
+  if (kind === "llm" && mode === "realtime") {
+    return {
+      model: integration.default_realtime_model || fallback.model || integration.default_model || "",
+      text_model: integration.default_model || fallback.text_model || "",
+      voice: integration.default_voice || fallback.voice || "",
+    };
+  }
+  return {
+    model: integration.default_model || fallback.text_model || fallback.model || "",
+    text_model: integration.default_model || fallback.text_model || "",
+    voice: integration.default_voice || fallback.voice || "",
+  };
 }
 
-function applyTemplate(flow, templateId) {
+function stepsFromTemplate(template, config) {
+  return template.steps.map(([id, kind, label, integrationId]) => {
+    const defaults = stepDefaults(config, integrationId, kind, template.mode);
+    return {
+      ...makeStep(kind, label, integrationId, id),
+      id,
+      model: ["stt", "llm", "tts"].includes(kind) ? defaults.model || "" : "",
+      voice: ["tts", "output"].includes(kind) ? defaults.voice || "" : "",
+    };
+  });
+}
+
+function applyTemplate(flow, templateId, config = null) {
   const template = templates.find((item) => item.id === templateId) || templates[0];
-  const defaults = providerDefaults(template.provider);
-  const steps = template.id === "custom" && flow.steps?.length ? flow.steps : stepsFromTemplate(template);
+  const defaults = integrationDefaults(config, template.provider);
+  const steps = template.id === "custom" && flow.steps?.length ? flow.steps : stepsFromTemplate(template, config);
   const llm = steps.find((step) => step.kind === "llm");
   const output = steps.find((step) => step.kind === "output" || step.kind === "tts");
-  const stepModel = realtimeModelMatchesProvider(template.provider, llm?.model) ? llm.model : "";
-  const flowModel = realtimeModelMatchesProvider(template.provider, flow.model) ? flow.model : "";
-  const stepVoice = realtimeVoiceMatchesProvider(template.provider, output?.voice) ? output.voice : "";
-  const flowVoice = realtimeVoiceMatchesProvider(template.provider, flow.voice) ? flow.voice : "";
+  const isRealtime = template.mode === "realtime";
+  const providerKind = providerKindForIntegration(config, llm?.integration_id || template.provider);
+  const stepModel =
+    isRealtime && !realtimeModelMatchesProvider(providerKind, llm?.model) ? "" : llm?.model || "";
+  const flowModel =
+    isRealtime && !realtimeModelMatchesProvider(providerKind, flow.model) ? "" : flow.model || "";
+  const stepVoice =
+    isRealtime && !realtimeVoiceMatchesProvider(providerKind, output?.voice) ? "" : output?.voice || "";
+  const flowVoice =
+    isRealtime && !realtimeVoiceMatchesProvider(providerKind, flow.voice) ? "" : flow.voice || "";
   return {
     ...flow,
     mode: template.mode,
@@ -303,7 +550,8 @@ function ensureShape(config) {
   );
   shaped.flows = (shaped.flows?.length ? shaped.flows : [clone(defaultFlow)]).map((flow) => {
     const merged = { ...clone(defaultFlow), ...flow };
-    if (!merged.steps?.length) return applyTemplate(merged, merged.pipeline_template || "gemini_live_home");
+    if (!merged.conversation_flow?.nodes?.length) merged.conversation_flow = clone(defaultFlow.conversation_flow);
+    if (!merged.steps?.length) return applyTemplate(merged, merged.pipeline_template || "gemini_live_home", shaped);
     return merged;
   });
   shaped.selected_flow_id ||= shaped.flows[0].id;
@@ -317,19 +565,12 @@ function syncFlow(flow) {
   );
   const providerId = llm?.integration_id || flow.provider_id || "gemini";
   const defaults = providerDefaults(providerId);
-  const stepModel = realtimeModelMatchesProvider(providerId, llm?.model) ? llm.model : "";
-  const flowModel = realtimeModelMatchesProvider(providerId, flow.model) ? flow.model : "";
-  const stepVoice = realtimeVoiceMatchesProvider(providerId, output?.voice) ? output.voice : "";
-  const flowVoice = realtimeVoiceMatchesProvider(providerId, flow.voice) ? flow.voice : "";
-  const steps = (flow.steps || []).map((step) => {
-    if (step.id === llm?.id && step.model && !realtimeModelMatchesProvider(providerId, step.model)) {
-      return { ...step, model: "" };
-    }
-    if (step.id === output?.id && step.voice && !realtimeVoiceMatchesProvider(providerId, step.voice)) {
-      return { ...step, voice: "" };
-    }
-    return step;
-  });
+  const isRealtime = flow.mode === "realtime";
+  const stepModel = isRealtime && !realtimeModelMatchesProvider(providerId, llm?.model) ? "" : llm?.model || "";
+  const flowModel = isRealtime && !realtimeModelMatchesProvider(providerId, flow.model) ? "" : flow.model || "";
+  const stepVoice = isRealtime && !realtimeVoiceMatchesProvider(providerId, output?.voice) ? "" : output?.voice || "";
+  const flowVoice = isRealtime && !realtimeVoiceMatchesProvider(providerId, flow.voice) ? "" : flow.voice || "";
+  const steps = flow.steps || [];
   return {
     ...flow,
     steps,
@@ -388,13 +629,33 @@ function integrationSummary(integration) {
   if (integration.kind === "home_assistant_mcp") {
     return secretStatus(integration, "token") === "configured" ? "token saved" : "Supervisor default";
   }
-  if (["gemini", "openai", "anthropic", "azure_openai"].includes(integration.kind)) {
+  if (
+    [
+      "gemini",
+      "openai",
+      "anthropic",
+      "azure_openai",
+      "soniox",
+      "deepgram",
+      "cartesia",
+      "gradium",
+      "speechmatics",
+      "elevenlabs",
+    ].includes(integration.kind)
+  ) {
     const status = secretStatus(integration, "api_key");
     if (status === "configured") return "API key saved";
     if (status === "pending") return "save pending";
     return "API key missing";
   }
+  if (integration.kind === "google_cloud_tts") {
+    if (integration.credentials_path) return "credentials path";
+    return secretStatus(integration, "credentials_json") === "configured" ? "credentials saved" : "credentials missing";
+  }
   if (integration.kind === "aws_bedrock") {
+    return integration.region ? `region ${integration.region}` : "region missing";
+  }
+  if (integration.kind === "aws_nova_sonic") {
     return integration.region ? `region ${integration.region}` : "region missing";
   }
   if (["ollama", "openai_compatible", "local_runtime"].includes(integration.kind)) {
@@ -438,9 +699,10 @@ function App() {
   const [config, setConfig] = useState(null);
   const [status, setStatus] = useState(null);
   const [audioDebug, setAudioDebug] = useState({ recordings: [] });
-  const [tab, setTab] = useState("pipelines");
+  const [tab, setTab] = useState("assistant");
   const [selectedStepId, setSelectedStepId] = useState("");
   const [selectedIntegrationId, setSelectedIntegrationId] = useState("gemini");
+  const [modelOptions, setModelOptions] = useState({});
   const [message, setMessage] = useState({ text: "", tone: "" });
   const [fatalError, setFatalError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -539,6 +801,15 @@ function App() {
     });
   }
 
+  async function loadModelOptions(integrationId, capability = "llm") {
+    const key = `${integrationId}:${capability}`;
+    if (modelOptions[key]) return;
+    const response = await fetch(API.models(integrationId, capability));
+    if (!response.ok) return;
+    const result = await response.json();
+    setModelOptions((current) => ({ ...current, [key]: result.models || [] }));
+  }
+
   function selectFlow(flowId) {
     updateConfig((draft) => {
       draft.selected_flow_id = flowId;
@@ -558,6 +829,7 @@ function App() {
         name: baseName,
       },
       "gemini_live_home",
+      config,
     );
     updateConfig((draft) => {
       draft.flows.push(flow);
@@ -627,6 +899,9 @@ function App() {
       default_voice: providerDefaults(kind).voice || "",
       organization: "",
       project: "",
+      location: "",
+      credentials_json: "",
+      credentials_path: "",
       access_key_id: "",
       secret_key: "",
     };
@@ -754,6 +1029,7 @@ function App() {
 
         <nav className="tabs" aria-label="Pipecat Assist">
           {[
+            ["assistant", "Assistant", Bot],
             ["pipelines", "Pipelines", Workflow],
             ["integrations", "Integrations", SlidersHorizontal],
             ["runtime", "Runtime", Settings],
@@ -796,7 +1072,15 @@ function App() {
       <main className="workspace">
         <header className="topbar">
           <div>
-            <h2>{tab === "pipelines" ? selectedFlow.name : tab === "integrations" ? "Integrations" : "Runtime"}</h2>
+            <h2>
+              {tab === "assistant"
+                ? "Assistant"
+                : tab === "pipelines"
+                  ? selectedFlow.name
+                  : tab === "integrations"
+                    ? "Integrations"
+                    : "Runtime"}
+            </h2>
             <span>{selectedFlow.mode} pipeline</span>
           </div>
           <div className="actions">
@@ -806,6 +1090,16 @@ function App() {
             </Button>
           </div>
         </header>
+
+        {tab === "assistant" && (
+          <AssistantView
+            config={config}
+            flow={selectedFlow}
+            status={status}
+            selectFlow={selectFlow}
+            setTab={setTab}
+          />
+        )}
 
         {tab === "pipelines" && (
           <PipelineView
@@ -830,6 +1124,8 @@ function App() {
             updateIntegration={updateIntegration}
             addIntegration={addIntegration}
             deleteIntegration={deleteIntegration}
+            modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions}
           />
         )}
 
@@ -855,6 +1151,92 @@ function App() {
           <span>{message.text}</span>
         </div>
       </main>
+    </div>
+  );
+}
+
+function pipelineTemplate(flow) {
+  return templates.find((item) => item.id === flow.pipeline_template) || templates[0];
+}
+
+function pipelineReadiness(config, flow) {
+  const missing = [];
+  const providerSteps = (flow.steps || []).filter((step) =>
+    ["stt", "llm", "tts", "output"].includes(step.kind) && step.integration_id,
+  );
+  for (const step of providerSteps) {
+    const integration = config.integrations.find((item) => item.id === step.integration_id);
+    if (!integration || !integration.enabled) {
+      missing.push(step.integration_id);
+      continue;
+    }
+    if (
+      !["home_assistant_mcp", "google_cloud_tts", "aws_bedrock", "aws_nova_sonic", "ollama", "local_runtime"].includes(
+        integration.kind,
+      ) &&
+      secretStatus(integration, "api_key") === "missing"
+    ) {
+      missing.push(integration.name);
+    }
+    if (integration.kind === "google_cloud_tts" && !integration.credentials_path && secretStatus(integration, "credentials_json") === "missing") {
+      missing.push(integration.name);
+    }
+    if (["aws_bedrock", "aws_nova_sonic"].includes(integration.kind)) {
+      if (secretStatus(integration, "access_key_id") === "missing" || secretStatus(integration, "secret_key") === "missing") {
+        missing.push(integration.name);
+      }
+    }
+  }
+  return [...new Set(missing)];
+}
+
+function AssistantView({ config, flow, status, selectFlow, setTab }) {
+  const template = pipelineTemplate(flow);
+  const Icon = template.icon || Bot;
+  const missing = pipelineReadiness(config, flow);
+  return (
+    <div className="assistant-grid">
+      <section className={`assistant-hero ${template.accent || "blue"}`}>
+        <div className="assistant-badge">
+          <Icon size={34} />
+        </div>
+        <div className="assistant-title">
+          <span>{template.group || flow.mode}</span>
+          <h3>{flow.name}</h3>
+          <strong>{missing.length ? `${missing.length} settings missing` : "Ready"}</strong>
+        </div>
+        <VoiceTest config={config} flow={flow} />
+      </section>
+
+      <section className="panel assistant-side">
+        <div className="panel-head">
+          <div>
+            <h3>Active pipeline</h3>
+            <span>{status?.mcp_token_source || config.mcp_token_source || "MCP pending"}</span>
+          </div>
+          <Button icon={Workflow} variant="secondary" onClick={() => setTab("pipelines")}>
+            Edit
+          </Button>
+        </div>
+        <div className="flow-list compact">
+          {config.flows.map((item) => {
+            const TemplateIcon = pipelineTemplate(item).icon || Workflow;
+            return (
+              <button
+                key={item.id}
+                className={item.id === flow.id ? "flow-card active" : "flow-card"}
+                onClick={() => selectFlow(item.id)}
+              >
+                <TemplateIcon size={18} />
+                <span>
+                  <strong>{item.name}</strong>
+                  <small>{pipelineTemplate(item).label}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }
@@ -889,24 +1271,34 @@ function PipelineView({
           </div>
         </div>
 
-        <div className="template-grid">
-          {templates.map((template) => {
-            const Icon = template.icon;
-            return (
-              <button
-                key={template.id}
-                className={
-                  flow.pipeline_template === template.id
-                    ? `template-card active ${template.accent}`
-                    : `template-card ${template.accent}`
-                }
-                onClick={() => updateFlow((draft) => applyTemplate(draft, template.id))}
-              >
-                <Icon size={20} />
-                <strong>{template.label}</strong>
-              </button>
-            );
-          })}
+        <div className="template-groups">
+          {[...new Set(templates.map((template) => template.group || "Other"))].map((group) => (
+            <div className="template-group" key={group}>
+              <span>{group}</span>
+              <div className="template-grid">
+                {templates
+                  .filter((template) => (template.group || "Other") === group)
+                  .map((template) => {
+                    const Icon = template.icon;
+                    return (
+                      <button
+                        key={template.id}
+                        className={
+                          flow.pipeline_template === template.id
+                            ? `template-card active ${template.accent}`
+                            : `template-card ${template.accent}`
+                        }
+                        onClick={() => updateFlow((draft) => applyTemplate(draft, template.id, config))}
+                      >
+                        <Icon size={20} />
+                        <strong>{template.label}</strong>
+                        <small>{template.mode}</small>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="pipeline-canvas">
@@ -953,7 +1345,12 @@ function PipelineView({
           <Toggle checked={flow.video_enabled} onChange={(value) => updateFlow((draft) => ({ ...draft, video_enabled: value }))} label="Video input" />
         </div>
 
-        {selectedStep && (
+        {selectedStep?.kind === "flow" ? (
+          <>
+            <div className="divider" />
+            <ConversationFlowEditor flow={flow} updateFlow={updateFlow} />
+          </>
+        ) : selectedStep ? (
           <>
             <div className="divider" />
             <div className="form-grid">
@@ -975,43 +1372,49 @@ function PipelineView({
                   ))}
                 </select>
               </Field>
-              <Field label="Integration">
-                <select
-                  value={selectedStep.integration_id || ""}
-                  onChange={(event) => {
-                    const integrationId = event.target.value;
-                    const defaults = providerDefaults(providerKindForIntegration(config, integrationId));
-                    updateStep(selectedStep.id, (step) => ({
-                      ...step,
-                      integration_id: integrationId,
-                      model: step.kind === "llm" ? defaults.model || "" : step.model,
-                      voice:
-                        step.kind === "output" || step.kind === "tts"
-                          ? defaults.voice || ""
-                          : step.voice,
-                    }));
-                  }}
-                >
-                  <option value="">None</option>
-                  {config.integrations.map((integration) => (
-                    <option key={integration.id} value={integration.id}>
-                      {integration.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Model">
-                <input
-                  value={selectedStep.model || ""}
-                  onChange={(event) => updateStep(selectedStep.id, (step) => ({ ...step, model: event.target.value }))}
-                />
-              </Field>
-              <Field label="Voice">
-                <input
-                  value={selectedStep.voice || ""}
-                  onChange={(event) => updateStep(selectedStep.id, (step) => ({ ...step, voice: event.target.value }))}
-                />
-              </Field>
+              {["stt", "llm", "tools", "tts", "output"].includes(selectedStep.kind) && (
+                <Field label="Integration">
+                  <select
+                    value={selectedStep.integration_id || ""}
+                    onChange={(event) => {
+                      const integrationId = event.target.value;
+                      const defaults = stepDefaults(config, integrationId, selectedStep.kind, flow.mode);
+                      updateStep(selectedStep.id, (step) => ({
+                        ...step,
+                        integration_id: integrationId,
+                        model: ["stt", "llm", "tts"].includes(step.kind) ? defaults.model || "" : step.model,
+                        voice:
+                          step.kind === "output" || step.kind === "tts"
+                            ? defaults.voice || ""
+                            : step.voice,
+                      }));
+                    }}
+                  >
+                    <option value="">None</option>
+                    {config.integrations.map((integration) => (
+                      <option key={integration.id} value={integration.id}>
+                        {integration.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              {["stt", "llm", "tts"].includes(selectedStep.kind) && (
+                <Field label="Model">
+                  <input
+                    value={selectedStep.model || ""}
+                    onChange={(event) => updateStep(selectedStep.id, (step) => ({ ...step, model: event.target.value }))}
+                  />
+                </Field>
+              )}
+              {["tts", "output"].includes(selectedStep.kind) && (
+                <Field label="Voice">
+                  <input
+                    value={selectedStep.voice || ""}
+                    onChange={(event) => updateStep(selectedStep.id, (step) => ({ ...step, voice: event.target.value }))}
+                  />
+                </Field>
+              )}
               <Toggle
                 checked={selectedStep.enabled}
                 onChange={(value) => updateStep(selectedStep.id, (step) => ({ ...step, enabled: value }))}
@@ -1027,7 +1430,7 @@ function PipelineView({
               </Button>
             </div>
           </>
-        )}
+        ) : null}
 
         <div className="divider" />
         <div className="form-grid">
@@ -1100,6 +1503,264 @@ function PipelineView({
   );
 }
 
+function safeJson(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function ConversationFlowEditor({ flow, updateFlow }) {
+  const nodes = flow.conversation_flow?.nodes || [];
+  const [selectedNodeId, setSelectedNodeId] = useState(
+    flow.conversation_flow?.initial_node_id || nodes[0]?.id || "",
+  );
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId) || nodes[0];
+
+  function updateConversationFlow(updater) {
+    updateFlow((draft) => {
+      const current = draft.conversation_flow?.nodes?.length
+        ? clone(draft.conversation_flow)
+        : clone(defaultFlow.conversation_flow);
+      draft.conversation_flow = updater(current);
+      return draft;
+    });
+  }
+
+  function updateNode(nodeId, updater) {
+    updateConversationFlow((conversationFlow) => {
+      conversationFlow.nodes = conversationFlow.nodes.map((node) =>
+        node.id === nodeId ? updater(clone(node)) : node,
+      );
+      return conversationFlow;
+    });
+  }
+
+  function addNode() {
+    const id = slugify(`node-${nodes.length + 1}`);
+    updateConversationFlow((conversationFlow) => {
+      conversationFlow.nodes.push({
+        id,
+        label: "New node",
+        role_message: flow.instructions,
+        task: "Continue the conversation.",
+        functions: [],
+      });
+      return conversationFlow;
+    });
+    setSelectedNodeId(id);
+  }
+
+  function removeNode(nodeId) {
+    if (nodes.length <= 1) return;
+    updateConversationFlow((conversationFlow) => {
+      conversationFlow.nodes = conversationFlow.nodes.filter((node) => node.id !== nodeId);
+      if (conversationFlow.initial_node_id === nodeId) {
+        conversationFlow.initial_node_id = conversationFlow.nodes[0]?.id || "";
+      }
+      return conversationFlow;
+    });
+    setSelectedNodeId(nodes.find((node) => node.id !== nodeId)?.id || "");
+  }
+
+  function addFunction() {
+    if (!selectedNode) return;
+    updateNode(selectedNode.id, (node) => {
+      node.functions = node.functions || [];
+      node.functions.push({
+        name: slugify(`function-${node.functions.length + 1}`).replaceAll("-", "_"),
+        description: "Continue the flow.",
+        properties: {},
+        required: [],
+        next_node_id: "",
+        mcp_tool: "",
+      });
+      return node;
+    });
+  }
+
+  function updateFunction(index, updater) {
+    updateNode(selectedNode.id, (node) => {
+      node.functions = (node.functions || []).map((fn, fnIndex) =>
+        fnIndex === index ? updater(clone(fn)) : fn,
+      );
+      return node;
+    });
+  }
+
+  function removeFunction(index) {
+    updateNode(selectedNode.id, (node) => {
+      node.functions = (node.functions || []).filter((_, fnIndex) => fnIndex !== index);
+      return node;
+    });
+  }
+
+  return (
+    <div className="flow-editor">
+      <div className="section-title">
+        <strong>Pipecat Flow</strong>
+        <span>{flow.mode === "realtime" ? "S2S router" : "FlowManager"}</span>
+      </div>
+      <div className="form-grid">
+        <Toggle
+          checked={flow.conversation_flow?.enabled}
+          onChange={(value) =>
+            updateConversationFlow((conversationFlow) => ({ ...conversationFlow, enabled: value }))
+          }
+          label="Enabled"
+        />
+        <Field label="Initial node">
+          <select
+            value={flow.conversation_flow?.initial_node_id || nodes[0]?.id || ""}
+            onChange={(event) =>
+              updateConversationFlow((conversationFlow) => ({
+                ...conversationFlow,
+                initial_node_id: event.target.value,
+              }))
+            }
+          >
+            {nodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label || node.id}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <div className="flow-node-grid">
+        <div className="flow-node-list">
+          {nodes.map((node, index) => (
+            <button
+              key={node.id}
+              className={selectedNode?.id === node.id ? `flow-node active tone-${index % 5}` : `flow-node tone-${index % 5}`}
+              onClick={() => setSelectedNodeId(node.id)}
+            >
+              <strong>{node.label || node.id}</strong>
+              <span>{(node.functions || []).length} functions</span>
+            </button>
+          ))}
+          <button className="flow-node add-node" onClick={addNode}>
+            <Plus size={16} />
+            <strong>Add node</strong>
+          </button>
+        </div>
+
+        {selectedNode && (
+          <div className="flow-node-detail">
+            <div className="form-grid">
+              <Field label="Label">
+                <input
+                  value={selectedNode.label || ""}
+                  onChange={(event) => updateNode(selectedNode.id, (node) => ({ ...node, label: event.target.value }))}
+                />
+              </Field>
+              <Field label="ID">
+                <input value={selectedNode.id} readOnly />
+              </Field>
+              <Field label="Role" wide>
+                <textarea
+                  rows={3}
+                  value={selectedNode.role_message || ""}
+                  onChange={(event) =>
+                    updateNode(selectedNode.id, (node) => ({ ...node, role_message: event.target.value }))
+                  }
+                />
+              </Field>
+              <Field label="Task" wide>
+                <textarea
+                  rows={3}
+                  value={selectedNode.task || ""}
+                  onChange={(event) => updateNode(selectedNode.id, (node) => ({ ...node, task: event.target.value }))}
+                />
+              </Field>
+            </div>
+
+            <div className="section-title">
+              <strong>Functions</strong>
+              <Button icon={Plus} variant="secondary" onClick={addFunction}>
+                Add
+              </Button>
+            </div>
+            {(selectedNode.functions || []).map((fn, index) => (
+              <div className="function-row" key={`${selectedNode.id}-${index}`}>
+                <div className="form-grid">
+                  <Field label="Name">
+                    <input
+                      value={fn.name || ""}
+                      onChange={(event) => updateFunction(index, (item) => ({ ...item, name: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Next node">
+                    <select
+                      value={fn.next_node_id || ""}
+                      onChange={(event) => updateFunction(index, (item) => ({ ...item, next_node_id: event.target.value }))}
+                    >
+                      <option value="">Stay</option>
+                      {nodes.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {node.label || node.id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="MCP tool">
+                    <input
+                      value={fn.mcp_tool || ""}
+                      onChange={(event) => updateFunction(index, (item) => ({ ...item, mcp_tool: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Required">
+                    <input
+                      value={(fn.required || []).join(", ")}
+                      onChange={(event) =>
+                        updateFunction(index, (item) => ({
+                          ...item,
+                          required: event.target.value
+                            .split(",")
+                            .map((value) => value.trim())
+                            .filter(Boolean),
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Description" wide>
+                    <input
+                      value={fn.description || ""}
+                      onChange={(event) =>
+                        updateFunction(index, (item) => ({ ...item, description: event.target.value }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Parameters JSON" wide>
+                    <textarea
+                      rows={5}
+                      value={JSON.stringify(fn.properties || {}, null, 2)}
+                      onChange={(event) =>
+                        updateFunction(index, (item) => ({
+                          ...item,
+                          properties: safeJson(event.target.value, item.properties || {}),
+                        }))
+                      }
+                    />
+                  </Field>
+                </div>
+                <Button icon={Trash2} variant="danger" onClick={() => removeFunction(index)}>
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <Button icon={Trash2} variant="danger" onClick={() => removeNode(selectedNode.id)} disabled={nodes.length <= 1}>
+              Remove node
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function IntegrationsView({
   config,
   selectedIntegration,
@@ -1107,6 +1768,8 @@ function IntegrationsView({
   updateIntegration,
   addIntegration,
   deleteIntegration,
+  modelOptions,
+  loadModelOptions,
 }) {
   return (
     <div className="workspace-grid">
@@ -1117,11 +1780,25 @@ function IntegrationsView({
             <span>{config.integrations.length} integrations</span>
           </div>
           <div className="button-row">
+            <select
+              className="add-select"
+              defaultValue=""
+              onChange={(event) => {
+                if (event.target.value) addIntegration(event.target.value);
+                event.target.value = "";
+              }}
+            >
+              <option value="">Add supported</option>
+              {providerKinds
+                .filter(([kind]) => kind !== "home_assistant_mcp")
+                .map(([kind, label]) => (
+                  <option key={kind} value={kind}>
+                    {label}
+                  </option>
+                ))}
+            </select>
             <Button icon={Plus} variant="secondary" onClick={() => addIntegration("openai_compatible")}>
-              Compatible
-            </Button>
-            <Button icon={Cpu} variant="secondary" onClick={() => addIntegration("ollama")}>
-              Local
+              Custom
             </Button>
           </div>
         </div>
@@ -1163,7 +1840,12 @@ function IntegrationsView({
           </div>
 
           <IntegrationIdentity integration={selectedIntegration} updateIntegration={updateIntegration} />
-          <IntegrationSettings integration={selectedIntegration} updateIntegration={updateIntegration} />
+          <IntegrationSettings
+            integration={selectedIntegration}
+            updateIntegration={updateIntegration}
+            modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions}
+          />
         </section>
       )}
     </div>
@@ -1210,7 +1892,7 @@ function IntegrationIdentity({ integration, updateIntegration }) {
   );
 }
 
-function IntegrationSettings({ integration, updateIntegration }) {
+function IntegrationSettings({ integration, updateIntegration, modelOptions, loadModelOptions }) {
   if (integration.kind === "gemini") {
     return (
       <>
@@ -1218,8 +1900,24 @@ function IntegrationSettings({ integration, updateIntegration }) {
           <SecretSetting integration={integration} field="api_key" label="Gemini API key" updateIntegration={updateIntegration} />
         </SettingsSection>
         <SettingsSection title="Models">
-          <TextSetting integration={integration} field="default_realtime_model" label="Live model" updateIntegration={updateIntegration} />
-          <TextSetting integration={integration} field="default_model" label="Text model" updateIntegration={updateIntegration} />
+          <ModelSetting
+            integration={integration}
+            field="default_realtime_model"
+            label="Live model"
+            updateIntegration={updateIntegration}
+            modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions}
+            capability="realtime"
+          />
+          <ModelSetting
+            integration={integration}
+            field="default_model"
+            label="Text model"
+            updateIntegration={updateIntegration}
+            modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions}
+            capability="llm"
+          />
           <TextSetting integration={integration} field="default_voice" label="Voice" updateIntegration={updateIntegration} />
         </SettingsSection>
       </>
@@ -1233,8 +1931,24 @@ function IntegrationSettings({ integration, updateIntegration }) {
           <SecretSetting integration={integration} field="api_key" label="OpenAI API key" updateIntegration={updateIntegration} />
         </SettingsSection>
         <SettingsSection title="Models">
-          <TextSetting integration={integration} field="default_realtime_model" label="Realtime model" updateIntegration={updateIntegration} />
-          <TextSetting integration={integration} field="default_model" label="Text model" updateIntegration={updateIntegration} />
+          <ModelSetting
+            integration={integration}
+            field="default_realtime_model"
+            label="Realtime model"
+            updateIntegration={updateIntegration}
+            modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions}
+            capability="realtime"
+          />
+          <ModelSetting
+            integration={integration}
+            field="default_model"
+            label="Text model"
+            updateIntegration={updateIntegration}
+            modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions}
+            capability="llm"
+          />
           <TextSetting integration={integration} field="default_voice" label="Voice" updateIntegration={updateIntegration} />
         </SettingsSection>
       </>
@@ -1247,6 +1961,60 @@ function IntegrationSettings({ integration, updateIntegration }) {
         <TextSetting integration={integration} field="base_url" label="MCP URL" updateIntegration={updateIntegration} />
         <SecretSetting integration={integration} field="token" label="Access token" updateIntegration={updateIntegration} />
       </SettingsSection>
+    );
+  }
+
+  if (["soniox", "deepgram", "gradium", "speechmatics"].includes(integration.kind)) {
+    return (
+      <SettingsSection title={kindLabel(integration.kind)} status={secretStatus(integration, "api_key")}>
+        <SecretSetting integration={integration} field="api_key" label="API key" updateIntegration={updateIntegration} />
+        <TextSetting integration={integration} field="default_model" label="STT model" updateIntegration={updateIntegration} />
+        {integration.kind === "soniox" && (
+          <TextSetting integration={integration} field="default_voice" label="TTS voice" updateIntegration={updateIntegration} />
+        )}
+      </SettingsSection>
+    );
+  }
+
+  if (["cartesia", "elevenlabs"].includes(integration.kind)) {
+    return (
+      <SettingsSection title={kindLabel(integration.kind)} status={secretStatus(integration, "api_key")}>
+        <SecretSetting integration={integration} field="api_key" label="API key" updateIntegration={updateIntegration} />
+        <TextSetting integration={integration} field="default_model" label="TTS model" updateIntegration={updateIntegration} />
+        <TextSetting integration={integration} field="default_voice" label="Voice" updateIntegration={updateIntegration} />
+      </SettingsSection>
+    );
+  }
+
+  if (integration.kind === "google_cloud_tts") {
+    return (
+      <>
+        <SettingsSection title="Google Cloud TTS" status={secretStatus(integration, "credentials_json")}>
+          <TextSetting integration={integration} field="credentials_path" label="Credentials path" updateIntegration={updateIntegration} wide />
+          <SecretSetting integration={integration} field="credentials_json" label="Credentials JSON" updateIntegration={updateIntegration} wide />
+          <TextSetting integration={integration} field="location" label="Location" updateIntegration={updateIntegration} />
+        </SettingsSection>
+        <SettingsSection title="Voice">
+          <TextSetting integration={integration} field="default_voice" label="Voice" updateIntegration={updateIntegration} />
+        </SettingsSection>
+      </>
+    );
+  }
+
+  if (integration.kind === "aws_nova_sonic") {
+    return (
+      <>
+        <SettingsSection title="AWS Nova Sonic">
+          <TextSetting integration={integration} field="region" label="Region" updateIntegration={updateIntegration} />
+          <TextSetting integration={integration} field="default_realtime_model" label="Realtime model" updateIntegration={updateIntegration} />
+          <TextSetting integration={integration} field="default_voice" label="Voice" updateIntegration={updateIntegration} />
+        </SettingsSection>
+        <SettingsSection title="Credentials" status={secretStatus(integration, "secret_key")}>
+          <SecretSetting integration={integration} field="access_key_id" label="Access key" updateIntegration={updateIntegration} />
+          <SecretSetting integration={integration} field="secret_key" label="Secret key" updateIntegration={updateIntegration} />
+          <SecretSetting integration={integration} field="token" label="Session token" updateIntegration={updateIntegration} />
+        </SettingsSection>
+      </>
     );
   }
 
@@ -1351,6 +2119,7 @@ function TextSetting({ integration, field, label, updateIntegration, wide = fals
   return (
     <Field label={label} wide={wide}>
       <input
+        autoComplete="off"
         value={integration[field] || ""}
         onChange={(event) => updateIntegration(integration.id, (item) => ({ ...item, [field]: event.target.value }))}
       />
@@ -1358,11 +2127,65 @@ function TextSetting({ integration, field, label, updateIntegration, wide = fals
   );
 }
 
+function ModelSetting({
+  integration,
+  field,
+  label,
+  updateIntegration,
+  modelOptions,
+  loadModelOptions,
+  capability = "llm",
+  wide = false,
+}) {
+  const key = `${integration.id}:${capability}`;
+  const options = modelOptions?.[key] || [];
+  const listId = `models-${integration.id}-${field}-${capability}`;
+  return (
+    <Field label={label} wide={wide}>
+      <input
+        autoComplete="off"
+        list={listId}
+        value={integration[field] || ""}
+        onFocus={() => loadModelOptions?.(integration.id, capability)}
+        onChange={(event) => updateIntegration(integration.id, (item) => ({ ...item, [field]: event.target.value }))}
+      />
+      <datalist id={listId}>
+        {options.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.label}
+          </option>
+        ))}
+      </datalist>
+    </Field>
+  );
+}
+
 function SecretSetting({ integration, field, label, updateIntegration, wide = false }) {
+  const [editing, setEditing] = useState(secretStatus(integration, field) !== "configured");
+  const configured = secretStatus(integration, field) === "configured";
+
+  useEffect(() => {
+    setEditing(secretStatus(integration, field) !== "configured");
+  }, [integration.id, field, integration[`${field}_configured`]]);
+
+  if (configured && !editing) {
+    return (
+      <Field label={label} wide={wide}>
+        <div className="locked-secret">
+          <input value="configured" readOnly />
+          <Button icon={RotateCcw} variant="secondary" onClick={() => setEditing(true)}>
+            Replace
+          </Button>
+        </div>
+      </Field>
+    );
+  }
+
   return (
     <Field label={label} wide={wide}>
       <input
         type="password"
+        autoComplete="new-password"
         value={secretValue(integration[field])}
         placeholder={secretPlaceholder(integration, field)}
         onChange={(event) => updateIntegration(integration.id, (item) => ({ ...item, [field]: event.target.value }))}
@@ -1418,6 +2241,14 @@ function voiceReadiness(config, flow) {
     return { ok: false, detail: "Selected pipeline is disabled." };
   }
 
+  const missing = pipelineReadiness(config, flow);
+  if (missing.length) {
+    return {
+      ok: false,
+      detail: `Configure ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "..." : ""} in Integrations, save, then retry.`,
+    };
+  }
+
   const integration = flowModelIntegration(config, flow);
   if (!integration) {
     return { ok: false, detail: "Selected pipeline has no model integration." };
@@ -1427,21 +2258,16 @@ function voiceReadiness(config, flow) {
     return { ok: false, detail: `${integration.name} is disabled.` };
   }
 
-  if (!["gemini", "openai"].includes(integration.kind)) {
-    return {
-      ok: false,
-      detail: `Voice test currently supports Gemini Live and OpenAI Realtime. Selected provider: ${kindLabel(integration.kind)}.`,
-    };
-  }
-
-  const keyStatus = secretStatus(integration, "api_key");
-  if (keyStatus === "missing") {
+  const keyStatus = ["gemini", "openai"].includes(integration.kind)
+    ? secretStatus(integration, "api_key")
+    : "configured";
+  if (flow.mode === "realtime" && keyStatus === "missing") {
     return {
       ok: false,
       detail: `${integration.name} API key is missing. Add it in Integrations, save, then retry.`,
     };
   }
-  if (keyStatus === "pending") {
+  if (flow.mode === "realtime" && keyStatus === "pending") {
     return {
       ok: false,
       detail: `Save configuration before starting the voice test; the add-on cannot use the new ${integration.name} key yet.`,
@@ -1462,7 +2288,7 @@ function voiceReadiness(config, flow) {
     };
   }
 
-  return { ok: true, detail: `Ready for ${integration.name}.` };
+  return { ok: true, detail: `Ready for ${flow.name}.` };
 }
 
 async function offerErrorMessage(response) {
@@ -1600,7 +2426,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.16",
+                library_version: "0.1.17",
                 platform: "browser",
               },
             },
@@ -1829,22 +2655,9 @@ function RuntimeView({
             </Button>
           </div>
         </div>
-        <div className="form-grid">
-          <Field label="MCP URL">
-            <input
-              value={mcp?.base_url || ""}
-              placeholder={config.effective_mcp_url}
-              onChange={(event) => updateIntegration(mcp?.id, (item) => ({ ...item, base_url: event.target.value }))}
-            />
-          </Field>
-          <Field label="Access token">
-            <input
-              type="password"
-              value={secretValue(mcp?.token)}
-              placeholder={tokenPlaceholder}
-              onChange={(event) => updateIntegration(mcp?.id, (item) => ({ ...item, token: event.target.value }))}
-            />
-          </Field>
+        <div className="runtime-facts">
+          <span>{config.effective_mcp_url}</span>
+          <strong>{tokenPlaceholder}</strong>
         </div>
         <div className="divider" />
         <div className="panel-head">

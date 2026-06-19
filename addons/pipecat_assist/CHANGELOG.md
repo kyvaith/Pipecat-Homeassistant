@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.17
+
+- Added composed realtime Pipecat runtime support for STT -> LLM -> TTS
+  pipelines alongside Gemini Live, OpenAI Realtime, and AWS Nova Sonic
+  speech-to-speech profiles.
+- Added pipeline presets inspired by the Pipecat demo, including Soniox,
+  Deepgram, Speechmatics, OpenAI, Gemini, AWS Bedrock, Cartesia, Gradium,
+  Google Cloud TTS, and ElevenLabs combinations.
+- Added Pipecat Flow configuration for composed realtime pipelines with visual
+  nodes, transition functions, JSON schemas, and optional Home Assistant MCP
+  tool calls.
+- Reworked the web UI around an Assistant-first screen, contextual pipeline
+  editing, grouped preset cards, integration-specific settings, locked saved
+  secrets, and provider model dropdowns where model APIs are available.
+
 ## 0.1.16
 
 - Added optional audio debug capture for realtime voice sessions, writing

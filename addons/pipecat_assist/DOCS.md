@@ -19,20 +19,25 @@ options.
 
 ## Web UI
 
+`Assistant`
+: Start or stop the browser voice test for the selected pipeline.
+
 `Pipelines`
-: Choose, add, duplicate, delete, and edit Pipecat pipelines. Templates include
-realtime, cloud cascade, local-first, and custom flows.
+: Choose, add, duplicate, delete, and edit complete Pipecat runtime profiles.
+Templates include speech-to-speech realtime, composed realtime, local-first,
+and custom flows. Composed realtime profiles can enable the Pipecat Flow tile
+for structured conversations and Home Assistant MCP tool calls.
 
 `Integrations`
-: Configure cloud providers and local AI endpoints, including OpenAI, Gemini,
-Anthropic, Bedrock, Azure/OpenAI-compatible APIs, Ollama, local runtimes, and
-Home Assistant MCP.
+: Configure cloud providers and local AI endpoints, including Gemini, OpenAI,
+Soniox, Deepgram, Cartesia, Gradium, Speechmatics, AWS, ElevenLabs, Google
+Cloud TTS, Azure/OpenAI-compatible APIs, Ollama, local runtimes, and Home
+Assistant MCP.
 
 `Runtime`
 : Check or reset Home Assistant MCP, configure the satellite public host and
-shared satellite secret, run a browser voice test, and enable audio debug
-captures for the selected pipeline through the same SmallWebRTC offer route
-used by satellites.
+shared satellite secret, and enable audio debug captures for the selected
+pipeline through the same SmallWebRTC offer route used by satellites.
 
 ### Home Assistant MCP
 

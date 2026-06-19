@@ -44,7 +44,9 @@ flowchart LR
     ESP32["Pipecat ESP32 satellite"] -->|"SmallWebRTC /api/offer"| Addon["Pipecat Assist add-on"]
     Browser["HA Ingress UI"] --> Addon
     HAConv["HA Conversation agent"] -->|"HTTP text bridge"| Addon
-    Addon -->|"Pipecat pipeline"| Realtime["Realtime model"]
+    Addon -->|"Pipecat S2S"| Realtime["Gemini Live / OpenAI Realtime / AWS Nova Sonic"]
+    Addon -->|"Pipecat composed realtime"| Cascade["STT + LLM + TTS"]
+    Cascade --> Flow["Pipecat Flows"]
     Addon -->|"Streamable HTTP /api/mcp"| HAMCP["Home Assistant MCP Server"]
     HAMCP --> Assist["HA Assist APIs and exposed entities"]
 ```
@@ -59,10 +61,14 @@ flowchart LR
    Home Assistant add-on install, Pipecat Assist uses the Supervisor token
    automatically.
 6. Configure model providers:
-   OpenAI, Gemini, Anthropic, Bedrock, Azure/OpenAI-compatible endpoints,
-   Ollama, or local runtimes.
-7. Choose or create a pipeline, then configure its model, tools, audio, and
-   satellite settings in the UI.
+   Gemini Live is the default, and additional providers such as OpenAI,
+   Soniox, Deepgram, Cartesia, Gradium, Speechmatics, AWS, ElevenLabs, Google
+   Cloud TTS, OpenAI-compatible endpoints, Ollama, and local runtimes can be
+   added from **Integrations**.
+7. Choose or create a pipeline. The built-in catalog includes realtime
+   speech-to-speech profiles and composed realtime profiles such as
+   `Soniox + OpenAI + Cartesia`, `Deepgram + Gemini + Google TTS`, and
+   `Speechmatics + AWS Nova Pro + ElevenLabs`.
 8. Build Pipecat ESP32 firmware with the generated
    `PIPECAT_SMALLWEBRTC_URL`.
 
@@ -73,6 +79,23 @@ Home Assistant MCP access uses the add-on's Supervisor token by default. Use
 **Runtime > Home Assistant > Reset MCP** to clear custom MCP overrides and
 return to the Supervisor-backed defaults. Manually pasted long-lived access
 tokens are only needed for custom installations outside the Supervisor path.
+
+## Pipelines and Pipecat Flows
+
+Pipecat Assist supports two realtime runtime families:
+
+- **Speech-to-speech realtime**: Gemini Live, OpenAI Realtime, and AWS Nova
+  Sonic take audio in and return audio directly. These are the lowest-friction
+  profiles and Gemini Live remains the first-run default.
+- **Composed realtime**: streaming STT, streaming LLM, and streaming TTS are
+  chained by Pipecat. These pipelines are still realtime over WebRTC, but each
+  stage can use a different provider.
+
+Official `pipecat-ai-flows` support is enabled for composed realtime pipelines.
+The flow editor stores nodes, transition functions, JSON schemas, and optional
+Home Assistant MCP tool calls. For speech-to-speech services, the UI keeps the
+flow tile as a conversation-router placeholder because Pipecat Flows does not
+currently support Gemini Live or OpenAI Realtime S2S APIs.
 
 ## Audio debugging
 

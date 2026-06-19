@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
@@ -41,10 +42,21 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
 
 from app.config import (
+    DEFAULT_AWS_NOVA_SONIC_MODEL,
+    DEFAULT_AWS_NOVA_SONIC_VOICE,
+    DEFAULT_CARTESIA_MODEL,
+    DEFAULT_CARTESIA_VOICE,
+    DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_ELEVENLABS_VOICE,
     DEFAULT_GEMINI_LIVE_MODEL,
     DEFAULT_GEMINI_LIVE_VOICE,
+    DEFAULT_GEMINI_TEXT_MODEL,
+    DEFAULT_GOOGLE_TTS_VOICE,
+    DEFAULT_OPENAI_TEXT_MODEL,
     DEFAULT_OPENAI_REALTIME_MODEL,
     DEFAULT_OPENAI_REALTIME_VOICE,
+    DEFAULT_OPENAI_TTS_MODEL,
+    DEFAULT_OPENAI_TTS_VOICE,
     ConfigStore,
     FlowConfig,
     IntegrationConfig,
@@ -160,6 +172,96 @@ async def api_update_config(payload: dict[str, Any], request: Request):
     data["runner_offer_url"] = _offer_url(config, request)
     data["runner_offer_path"] = _offer_path(config)
     return data
+
+
+def _static_models_for(integration: IntegrationConfig, capability: str) -> list[dict[str, str]]:
+    values: list[str] = []
+    if integration.kind == "openai":
+        if capability == "realtime":
+            values = [integration.default_realtime_model or DEFAULT_OPENAI_REALTIME_MODEL]
+        elif capability == "tts":
+            values = [integration.default_model or DEFAULT_OPENAI_TTS_MODEL, DEFAULT_OPENAI_TTS_MODEL]
+        else:
+            values = [integration.default_model or DEFAULT_OPENAI_TEXT_MODEL]
+    elif integration.kind == "gemini":
+        values = [
+            integration.default_realtime_model or DEFAULT_GEMINI_LIVE_MODEL,
+            integration.default_model or DEFAULT_GEMINI_TEXT_MODEL,
+        ]
+    elif integration.kind == "cartesia":
+        values = [integration.default_model or DEFAULT_CARTESIA_MODEL]
+    elif integration.kind == "elevenlabs":
+        values = [integration.default_model or DEFAULT_ELEVENLABS_MODEL]
+    elif integration.kind == "google_cloud_tts":
+        values = [integration.default_voice or DEFAULT_GOOGLE_TTS_VOICE]
+    elif integration.kind == "aws_nova_sonic":
+        values = [integration.default_realtime_model or DEFAULT_AWS_NOVA_SONIC_MODEL]
+    elif integration.kind == "aws_bedrock":
+        values = [integration.default_model or "amazon.nova-pro-v1:0"]
+    else:
+        values = [value for value in (integration.default_model, integration.default_realtime_model) if value]
+    seen = set()
+    return [
+        {"id": value, "label": value}
+        for value in values
+        if value and not (value in seen or seen.add(value))
+    ]
+
+
+def _filter_openai_model(model_id: str, capability: str) -> bool:
+    if capability == "realtime":
+        return "realtime" in model_id
+    if capability == "tts":
+        return "tts" in model_id
+    if capability == "stt":
+        return "transcribe" in model_id or "whisper" in model_id
+    return model_id.startswith(("gpt-", "o"))
+
+
+@app.get("/api/assist/integrations/{integration_id}/models")
+async def api_integration_models(integration_id: str, capability: str = "llm"):
+    config = STORE.load()
+    integration = config.integration(integration_id)
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    fallback = _static_models_for(integration, capability)
+    try:
+        if integration.kind == "openai" and (integration.api_key or config.openai_api_key):
+            headers = {"Authorization": f"Bearer {integration.api_key or config.openai_api_key}"}
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get("https://api.openai.com/v1/models", headers=headers)
+                response.raise_for_status()
+            models = sorted(
+                item["id"]
+                for item in response.json().get("data", [])
+                if _filter_openai_model(str(item.get("id", "")), capability)
+            )
+            if models:
+                return {"ok": True, "models": [{"id": item, "label": item} for item in models]}
+
+        if integration.kind == "gemini" and integration.api_key:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": integration.api_key},
+                )
+                response.raise_for_status()
+            models = []
+            for item in response.json().get("models", []):
+                name = str(item.get("name", ""))
+                methods = item.get("supportedGenerationMethods", [])
+                if capability == "realtime" and "live" not in name.lower():
+                    continue
+                if capability != "realtime" and "generateContent" not in methods:
+                    continue
+                models.append(name)
+            if models:
+                return {"ok": True, "models": [{"id": item, "label": item} for item in sorted(models)]}
+    except Exception as err:
+        logger.debug("Model list fetch failed for {}: {}", integration_id, err)
+
+    return {"ok": False, "models": fallback}
 
 
 @app.post("/api/assist/mcp/check")
@@ -284,6 +386,95 @@ def _output_step(flow: FlowConfig):
         (step for step in flow.steps if step.kind in {"output", "tts"} and step.enabled),
         None,
     )
+
+
+def _enabled_step(flow: FlowConfig, kind: str):
+    return next((step for step in flow.steps if step.kind == kind and step.enabled), None)
+
+
+def _step_integration(
+    config: RuntimeConfig,
+    flow: FlowConfig,
+    kind: str,
+) -> tuple[Any, IntegrationConfig | None]:
+    step = _enabled_step(flow, kind)
+    if not step:
+        return None, None
+    return step, config.integration(step.integration_id)
+
+
+def _secret(integration: IntegrationConfig | None, field: str = "api_key") -> str:
+    if not integration:
+        return ""
+    return str(getattr(integration, field, "") or "").strip()
+
+
+def _require_integration(
+    integration: IntegrationConfig | None,
+    role: str,
+    fields: tuple[str, ...] = ("api_key",),
+) -> IntegrationConfig:
+    if not integration:
+        raise RuntimeError(f"{role} integration is not selected")
+    if not integration.enabled:
+        raise RuntimeError(f"{integration.name} is disabled")
+    if fields and not any(_secret(integration, field) for field in fields):
+        readable = " or ".join(fields)
+        raise RuntimeError(f"{integration.name} is missing {readable}")
+    return integration
+
+
+def _integration_api_key(
+    integration: IntegrationConfig,
+    role: str,
+    fallback: str = "",
+) -> str:
+    api_key = (integration.api_key or fallback or "").strip()
+    if not api_key:
+        raise RuntimeError(f"{integration.name} is missing api_key for {role}")
+    return api_key
+
+
+def _step_model(step, integration: IntegrationConfig | None, fallback: str = "") -> str:
+    return (
+        (getattr(step, "model", "") if step else "")
+        or (integration.default_model if integration else "")
+        or fallback
+    ).strip()
+
+
+def _step_realtime_model(step, integration: IntegrationConfig | None, fallback: str = "") -> str:
+    return (
+        (getattr(step, "model", "") if step else "")
+        or (integration.default_realtime_model if integration else "")
+        or fallback
+    ).strip()
+
+
+def _step_voice(step, integration: IntegrationConfig | None, fallback: str = "") -> str:
+    return (
+        (getattr(step, "voice", "") if step else "")
+        or (integration.default_voice if integration else "")
+        or fallback
+    ).strip()
+
+
+def _runtime_mode(flow: FlowConfig, provider_kind: str | None = None) -> str:
+    if flow.mode == "composed" or flow.mode == "classic":
+        return "composed"
+    if flow.pipeline_template in {
+        "soniox_openai_cartesia",
+        "soniox_openai_gradium",
+        "deepgram_gemini_google_tts",
+        "deepgram_google_google_tts",
+        "speechmatics_aws_elevenlabs",
+        "cloud_cascade",
+        "local_first",
+    }:
+        return "composed"
+    if provider_kind == "aws_nova_sonic" or flow.pipeline_template == "aws_nova_sonic":
+        return "s2s"
+    return "s2s"
 
 
 def _realtime_model_matches_provider(provider_kind: str, model: str) -> bool:
@@ -427,6 +618,293 @@ def _openai_realtime_service(
     )
 
 
+def _aws_nova_sonic_service(
+    *,
+    integration: IntegrationConfig,
+    flow: FlowConfig,
+    model: str,
+    tools_schema,
+):
+    from pipecat.services.aws.nova_sonic.llm import AWSNovaSonicLLMService
+
+    tools = tools_schema.standard_tools if tools_schema and tools_schema.standard_tools else None
+    return AWSNovaSonicLLMService(
+        access_key_id=integration.access_key_id,
+        secret_access_key=integration.secret_key,
+        session_token=integration.token or None,
+        region=integration.region or "us-east-1",
+        settings=AWSNovaSonicLLMService.Settings(
+            model=model or DEFAULT_AWS_NOVA_SONIC_MODEL,
+            voice=flow.voice or integration.default_voice or DEFAULT_AWS_NOVA_SONIC_VOICE,
+            system_instruction=flow.instructions,
+        ),
+        tools=tools,
+    )
+
+
+def _build_stt_service(config: RuntimeConfig, flow: FlowConfig):
+    step, integration = _step_integration(config, flow, "stt")
+    integration = _require_integration(integration, "STT", fields=())
+    model = _step_model(step, integration)
+
+    if integration.kind == "soniox":
+        from pipecat.services.soniox.stt import SonioxSTTService
+
+        return SonioxSTTService(
+            api_key=_integration_api_key(integration, "STT"),
+            settings=SonioxSTTService.Settings(model=model or None),
+        )
+    if integration.kind == "deepgram":
+        from pipecat.services.deepgram.stt import DeepgramSTTService
+
+        return DeepgramSTTService(
+            api_key=_integration_api_key(integration, "STT"),
+            settings=DeepgramSTTService.Settings(model=model or None),
+        )
+    if integration.kind == "speechmatics":
+        from pipecat.services.speechmatics.stt import SpeechmaticsSTTService
+
+        return SpeechmaticsSTTService(api_key=_integration_api_key(integration, "STT"))
+    if integration.kind == "gradium":
+        from pipecat.services.gradium.stt import GradiumSTTService
+
+        return GradiumSTTService(
+            api_key=_integration_api_key(integration, "STT"),
+            settings=GradiumSTTService.Settings(model=model or None),
+        )
+    if integration.kind == "openai":
+        from pipecat.services.openai.stt import OpenAIRealtimeSTTService
+
+        return OpenAIRealtimeSTTService(
+            api_key=_integration_api_key(integration, "STT", config.openai_api_key),
+            model=model or "gpt-4o-mini-transcribe",
+            language=flow.language or "en",
+        )
+
+    raise RuntimeError(f"STT provider {integration.kind} is not supported by composed runtime")
+
+
+def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=None):
+    step, integration = _step_integration(config, flow, "llm")
+    integration = _require_integration(integration, "LLM", fields=())
+    model = _step_model(step, integration, flow.text_model)
+
+    if integration.kind == "openai":
+        from pipecat.services.openai.llm import OpenAILLMService
+
+        api_key = integration.api_key or config.openai_api_key
+        if not api_key:
+            raise RuntimeError("OpenAI is missing api_key")
+        return OpenAILLMService(
+            api_key=api_key,
+            organization=integration.organization or None,
+            project=integration.project or None,
+            settings=OpenAILLMService.Settings(
+                model=model or DEFAULT_OPENAI_TEXT_MODEL,
+                system_instruction=flow.instructions,
+                max_tokens=flow.max_output_tokens,
+            ),
+        )
+    if integration.kind == "gemini":
+        from pipecat.services.google.llm import GoogleLLMService
+
+        api_key = integration.api_key or os.getenv("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("Google Gemini is missing api_key")
+        return GoogleLLMService(
+            api_key=api_key,
+            settings=GoogleLLMService.Settings(
+                model=model or integration.default_model or DEFAULT_GEMINI_TEXT_MODEL,
+                system_instruction=flow.instructions,
+                max_tokens=flow.max_output_tokens or 4096,
+            ),
+        )
+    if integration.kind == "aws_bedrock":
+        from pipecat.services.aws.llm import AWSBedrockLLMService
+
+        _require_integration(integration, "AWS Bedrock", fields=("access_key_id", "secret_key"))
+        return AWSBedrockLLMService(
+            aws_access_key=integration.access_key_id,
+            aws_secret_key=integration.secret_key,
+            aws_session_token=integration.token or None,
+            aws_region=integration.region or "us-east-1",
+            settings=AWSBedrockLLMService.Settings(
+                model=model or integration.default_model,
+                system_instruction=flow.instructions,
+                max_tokens=flow.max_output_tokens,
+            ),
+        )
+    if integration.kind == "openai_compatible":
+        from pipecat.services.openai.llm import OpenAILLMService
+
+        return OpenAILLMService(
+            api_key=integration.api_key or "not-needed",
+            base_url=integration.base_url or None,
+            settings=OpenAILLMService.Settings(
+                model=model or integration.default_model,
+                system_instruction=flow.instructions,
+                max_tokens=flow.max_output_tokens,
+            ),
+        )
+    if integration.kind == "ollama":
+        from pipecat.services.ollama.llm import OLLamaLLMService
+
+        return OLLamaLLMService(
+            base_url=integration.base_url or "http://localhost:11434/v1",
+            settings=OLLamaLLMService.Settings(
+                model=model or integration.default_model or "llama3.2",
+                system_instruction=flow.instructions,
+            ),
+        )
+
+    raise RuntimeError(f"LLM provider {integration.kind} is not supported by composed runtime")
+
+
+def _build_tts_service(config: RuntimeConfig, flow: FlowConfig):
+    step, integration = _step_integration(config, flow, "tts")
+    integration = _require_integration(integration, "TTS", fields=())
+    model = _step_model(step, integration)
+    voice = _step_voice(step, integration)
+
+    if integration.kind == "cartesia":
+        from pipecat.services.cartesia.tts import CartesiaTTSService
+
+        return CartesiaTTSService(
+            api_key=_integration_api_key(integration, "TTS"),
+            settings=CartesiaTTSService.Settings(
+                model=model or DEFAULT_CARTESIA_MODEL,
+                voice=voice or DEFAULT_CARTESIA_VOICE,
+            ),
+        )
+    if integration.kind == "gradium":
+        from pipecat.services.gradium.tts import GradiumTTSService
+
+        return GradiumTTSService(
+            api_key=_integration_api_key(integration, "TTS"),
+            settings=GradiumTTSService.Settings(
+                model=model or None,
+                voice=voice or None,
+            ),
+        )
+    if integration.kind == "google_cloud_tts":
+        from pipecat.services.google.tts import GoogleHttpTTSService
+
+        if not integration.credentials_json and not integration.credentials_path:
+            raise RuntimeError("Google Cloud TTS is missing service account credentials")
+        return GoogleHttpTTSService(
+            credentials=integration.credentials_json or None,
+            credentials_path=integration.credentials_path or None,
+            location=integration.location or None,
+            settings=GoogleHttpTTSService.Settings(
+                voice=voice or DEFAULT_GOOGLE_TTS_VOICE,
+                speaking_rate=flow.speed,
+            ),
+        )
+    if integration.kind == "elevenlabs":
+        from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+
+        return ElevenLabsTTSService(
+            api_key=_integration_api_key(integration, "TTS"),
+            settings=ElevenLabsTTSService.Settings(
+                model=model or DEFAULT_ELEVENLABS_MODEL,
+                voice=voice or DEFAULT_ELEVENLABS_VOICE,
+                speed=flow.speed,
+            ),
+        )
+    if integration.kind == "openai":
+        from pipecat.services.openai.tts import OpenAITTSService
+
+        return OpenAITTSService(
+            api_key=_integration_api_key(integration, "TTS", config.openai_api_key),
+            settings=OpenAITTSService.Settings(
+                model=model or DEFAULT_OPENAI_TTS_MODEL,
+                voice=voice or DEFAULT_OPENAI_TTS_VOICE,
+                speed=flow.speed,
+            ),
+        )
+    if integration.kind == "soniox":
+        from pipecat.services.soniox.tts import SonioxTTSService
+
+        return SonioxTTSService(
+            api_key=_integration_api_key(integration, "TTS"),
+            settings=SonioxTTSService.Settings(voice=voice or None),
+        )
+
+    raise RuntimeError(f"TTS provider {integration.kind} is not supported by composed runtime")
+
+
+def _flow_enabled(flow: FlowConfig) -> bool:
+    return bool(flow.conversation_flow.get("enabled"))
+
+
+def _flow_node_configs(flow: FlowConfig, bridge: HomeAssistantMCPBridge | None):
+    from pipecat_flows import FlowsFunctionSchema
+
+    nodes = flow.conversation_flow.get("nodes") or []
+    by_id: dict[str, dict[str, Any]] = {}
+
+    def node_config(node: dict[str, Any]) -> dict[str, Any]:
+        node_id = str(node.get("id") or node.get("label") or "node")
+        if node_id in by_id:
+            return by_id[node_id]
+
+        functions = []
+        for fn in node.get("functions") or []:
+            name = str(fn.get("name") or f"go_to_{fn.get('next_node_id', 'next')}")
+            description = str(fn.get("description") or "Continue the conversation.")
+            properties = fn.get("properties") if isinstance(fn.get("properties"), dict) else {}
+            required = fn.get("required") if isinstance(fn.get("required"), list) else []
+            next_node_id = str(fn.get("next_node_id") or "")
+            mcp_tool = str(fn.get("mcp_tool") or "")
+
+            async def handler(args, flow_manager, *, next_node_id=next_node_id, mcp_tool=mcp_tool):
+                result: Any = {"status": "ok"}
+                if mcp_tool:
+                    if not bridge:
+                        result = {"status": "error", "error": "Home Assistant MCP is not connected"}
+                    else:
+                        result = {
+                            "status": "ok",
+                            "tool": mcp_tool,
+                            "result": await bridge.call_tool(mcp_tool, dict(args or {})),
+                        }
+                next_node = by_id.get(next_node_id) if next_node_id else None
+                return result, next_node
+
+            functions.append(
+                FlowsFunctionSchema(
+                    name=name,
+                    description=description,
+                    properties=properties,
+                    required=required,
+                    handler=handler,
+                )
+            )
+
+        config_node: dict[str, Any] = {
+            "name": node_id,
+            "role_message": str(node.get("role_message") or flow.instructions),
+            "task_messages": [
+                {
+                    "role": "developer",
+                    "content": str(node.get("task") or "Continue the conversation."),
+                }
+            ],
+            "functions": functions,
+            "respond_immediately": bool(node.get("respond_immediately", True)),
+        }
+        if node.get("post_actions"):
+            config_node["post_actions"] = node.get("post_actions")
+        by_id[node_id] = config_node
+        return config_node
+
+    for node in nodes:
+        node_config(node)
+
+    initial_id = str(flow.conversation_flow.get("initial_node_id") or "")
+    return by_id.get(initial_id) or next(iter(by_id.values()), None)
+
+
 async def run_bot(
     transport: BaseTransport,
     runner_args: RunnerArguments,
@@ -437,31 +915,8 @@ async def run_bot(
     """Run one Pipecat session."""
 
     integration = config.model_integration(flow)
-    if integration:
-        provider_kind = integration.kind
-    elif flow.provider_id in {"gemini", "openai"}:
-        provider_kind = flow.provider_id
-    else:
-        provider_kind = "openai"
-    if provider_kind not in {"openai", "gemini"}:
-        raise RuntimeError(
-            f"Realtime voice runtime for {provider_kind} is not enabled in this build yet"
-        )
-
-    if provider_kind == "gemini":
-        api_key = (integration.api_key if integration else "") or os.getenv("GOOGLE_API_KEY", "")
-    else:
-        api_key = (integration.api_key if integration else "") or config.openai_api_key
-    if not api_key:
-        raise RuntimeError(f"The selected {provider_kind} realtime provider is missing an API key")
-
-    realtime_model = _model_name(flow, integration, provider_kind)
-    logger.info(
-        "Starting {} realtime model {} for flow {}",
-        provider_kind,
-        realtime_model,
-        flow.id,
-    )
+    provider_kind = integration.kind if integration else flow.provider_id
+    runtime_mode = _runtime_mode(flow, provider_kind)
 
     bridge: HomeAssistantMCPBridge | None = None
     tools_schema = None
@@ -487,69 +942,209 @@ async def run_bot(
                 await bridge.close()
             bridge = None
 
-    if provider_kind == "gemini":
-        llm = _gemini_live_service(
-            api_key=api_key,
-            model=realtime_model,
-            flow=flow,
-            integration=integration,
-        )
-    else:
-        llm = _openai_realtime_service(
-            api_key=api_key,
-            model=realtime_model,
-            flow=flow,
-            integration=integration,
-            tools_schema=tools_schema,
-        )
-    if bridge and tools_schema:
-        await bridge.register_tools_schema(tools_schema, llm)
-
-    if tools_schema:
-        context = LLMContext([{"role": "developer", "content": flow.greeting}], tools_schema)
-    else:
-        context = LLMContext([{"role": "developer", "content": flow.greeting}])
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        realtime_service_mode=True,
-    )
-
     audio_debug = None
-    if config.audio_debug_enabled:
-        try:
-            audio_debug = create_audio_debug_session(
-                config,
-                flow,
-                provider_kind,
-                realtime_model,
+
+    if runtime_mode == "s2s":
+        if provider_kind not in {"openai", "gemini", "aws_nova_sonic"}:
+            raise RuntimeError(
+                f"Realtime speech-to-speech runtime for {provider_kind} is not supported"
             )
-        except Exception as err:
-            logger.warning("Audio debug recorder could not start: {}", err)
-    processors = [transport.input()]
-    if audio_debug:
-        processors.append(audio_debug.input_recorder)
-    processors.extend([user_aggregator, llm])
-    if audio_debug:
-        processors.append(audio_debug.output_recorder)
-    processors.extend([transport.output(), assistant_aggregator])
 
-    pipeline = Pipeline(processors)
+        if provider_kind == "gemini":
+            api_key = (integration.api_key if integration else "") or os.getenv("GOOGLE_API_KEY", "")
+        elif provider_kind == "openai":
+            api_key = (integration.api_key if integration else "") or config.openai_api_key
+        else:
+            api_key = ""
 
-    worker = PipelineWorker(
-        pipeline,
-        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
-        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-    )
+        if provider_kind in {"gemini", "openai"} and not api_key:
+            raise RuntimeError(f"The selected {provider_kind} realtime provider is missing an API key")
 
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport, client):
-        logger.info("Client connected to flow {}", flow.id)
-        await worker.queue_frames([LLMRunFrame()])
+        if provider_kind == "aws_nova_sonic":
+            integration = _require_integration(
+                integration,
+                "AWS Nova Sonic",
+                fields=("access_key_id", "secret_key"),
+            )
+            model_step = flow.model_step()
+            realtime_model = _step_realtime_model(
+                model_step,
+                integration,
+                DEFAULT_AWS_NOVA_SONIC_MODEL,
+            )
+            llm = _aws_nova_sonic_service(
+                integration=integration,
+                flow=flow,
+                model=realtime_model,
+                tools_schema=tools_schema,
+            )
+        elif provider_kind == "gemini":
+            realtime_model = _model_name(flow, integration, provider_kind)
+            llm = _gemini_live_service(
+                api_key=api_key,
+                model=realtime_model,
+                flow=flow,
+                integration=integration,
+            )
+        else:
+            realtime_model = _model_name(flow, integration, provider_kind)
+            llm = _openai_realtime_service(
+                api_key=api_key,
+                model=realtime_model,
+                flow=flow,
+                integration=integration,
+                tools_schema=tools_schema,
+            )
 
-    @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected from flow {}", flow.id)
-        await worker.cancel()
+        logger.info(
+            "Starting {} speech-to-speech model {} for flow {}",
+            provider_kind,
+            realtime_model,
+            flow.id,
+        )
+
+        if bridge and tools_schema:
+            await bridge.register_tools_schema(tools_schema, llm)
+
+        if tools_schema:
+            context = LLMContext([{"role": "developer", "content": flow.greeting}], tools_schema)
+        else:
+            context = LLMContext([{"role": "developer", "content": flow.greeting}])
+        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+            context,
+            realtime_service_mode=True,
+        )
+
+        if config.audio_debug_enabled:
+            try:
+                audio_debug = create_audio_debug_session(
+                    config,
+                    flow,
+                    provider_kind,
+                    realtime_model,
+                )
+            except Exception as err:
+                logger.warning("Audio debug recorder could not start: {}", err)
+        processors = [transport.input()]
+        if audio_debug:
+            processors.append(audio_debug.input_recorder)
+        processors.extend([user_aggregator, llm])
+        if audio_debug:
+            processors.append(audio_debug.output_recorder)
+        processors.extend([transport.output(), assistant_aggregator])
+
+        pipeline = Pipeline(processors)
+        worker = PipelineWorker(
+            pipeline,
+            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        )
+
+        @transport.event_handler("on_client_connected")
+        async def on_client_connected(transport, client):
+            logger.info("Client connected to flow {}", flow.id)
+            if _flow_enabled(flow):
+                logger.warning("Pipecat Flows are ignored for speech-to-speech runtime {}", provider_kind)
+            await worker.queue_frames([LLMRunFrame()])
+
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport, client):
+            logger.info("Client disconnected from flow {}", flow.id)
+            await worker.cancel()
+
+    else:
+        from pipecat.audio.vad.silero import SileroVADAnalyzer
+        from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
+
+        stt = _build_stt_service(config, flow)
+        llm = _build_llm_service(config, flow, tools_schema=tools_schema)
+        tts = _build_tts_service(config, flow)
+
+        _, stt_integration = _step_integration(config, flow, "stt")
+        llm_step, llm_integration = _step_integration(config, flow, "llm")
+        _, tts_integration = _step_integration(config, flow, "tts")
+        llm_model = _step_model(llm_step, llm_integration, flow.text_model)
+        provider_label = "+".join(
+            item.kind
+            for item in (stt_integration, llm_integration, tts_integration)
+            if item is not None
+        )
+        logger.info(
+            "Starting composed realtime pipeline {} with LLM {} for flow {}",
+            provider_label,
+            llm_model,
+            flow.id,
+        )
+
+        initial_flow_node = None
+        active_tools_schema = None if _flow_enabled(flow) else tools_schema
+        context_messages = [
+            {"role": "developer", "content": flow.instructions},
+            {"role": "developer", "content": flow.greeting},
+        ]
+        context = LLMContext(context_messages, active_tools_schema) if active_tools_schema else LLMContext(context_messages)
+        context_aggregator = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(
+                vad_analyzer=SileroVADAnalyzer(),
+                filter_incomplete_user_turns=True,
+            ),
+        )
+
+        if bridge and tools_schema and not _flow_enabled(flow):
+            await bridge.register_tools_schema(tools_schema, llm)
+
+        if _flow_enabled(flow):
+            initial_flow_node = _flow_node_configs(flow, bridge)
+
+        if config.audio_debug_enabled:
+            try:
+                audio_debug = create_audio_debug_session(
+                    config,
+                    flow,
+                    provider_label or "composed",
+                    llm_model,
+                )
+            except Exception as err:
+                logger.warning("Audio debug recorder could not start: {}", err)
+
+        processors = [transport.input()]
+        if audio_debug:
+            processors.append(audio_debug.input_recorder)
+        processors.extend([stt, context_aggregator.user(), llm, tts])
+        if audio_debug:
+            processors.append(audio_debug.output_recorder)
+        processors.extend([transport.output(), context_aggregator.assistant()])
+
+        pipeline = Pipeline(processors)
+        worker = PipelineWorker(
+            pipeline,
+            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        )
+        flow_manager = None
+        if initial_flow_node:
+            from pipecat_flows import FlowManager
+
+            flow_manager = FlowManager(
+                worker=worker,
+                llm=llm,
+                context_aggregator=context_aggregator,
+                transport=transport,
+            )
+
+        @transport.event_handler("on_client_connected")
+        async def on_client_connected(transport, client):
+            logger.info("Client connected to composed flow {}", flow.id)
+            if flow_manager and initial_flow_node:
+                await flow_manager.initialize(initial_flow_node)
+            else:
+                await worker.queue_frames([LLMRunFrame()])
+
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport, client):
+            logger.info("Client disconnected from flow {}", flow.id)
+            await worker.cancel()
 
     try:
         runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
