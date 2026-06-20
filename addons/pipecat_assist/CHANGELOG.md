@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.39
+
+- Fixed Lovelace WebRTC card playback by preserving the remote audio stream
+  across status rerenders and adding the same RTVI keepalive ping used by the
+  add-on voice test.
+- Added a browser-blocked playback recovery button for cases where the browser
+  requires an extra tap before audio can play.
+
 ## 0.1.38
 
 - Added safe provider error handling for HA Assist STT, TTS, and conversation

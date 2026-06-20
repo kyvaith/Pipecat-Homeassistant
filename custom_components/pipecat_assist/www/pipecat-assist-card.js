@@ -8,6 +8,8 @@ class PipecatAssistCard extends HTMLElement {
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this.state = "idle";
     this.detail = "Ready";
+    this.remoteStream = undefined;
+    this.audioBlocked = false;
     this.render();
   }
 
@@ -80,6 +82,10 @@ class PipecatAssistCard extends HTMLElement {
   }
 
   stop() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = undefined;
+    }
     this.channel?.readyState === "open" && this.channel.send(JSON.stringify({
       label: "rtvi-ai",
       id: crypto.randomUUID().slice(0, 8),
@@ -93,6 +99,8 @@ class PipecatAssistCard extends HTMLElement {
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = undefined;
     if (this.audio) this.audio.srcObject = null;
+    this.remoteStream = undefined;
+    this.audioBlocked = false;
     this.state = "idle";
     this.detail = "Stopped";
     this.render();
@@ -135,15 +143,22 @@ class PipecatAssistCard extends HTMLElement {
           type: "client-ready",
           data: {
             version: "1.4.0",
-            about: { library: "pipecat-assist-lovelace-card", platform: "home-assistant" },
+            about: {
+              library: "pipecat-assist-lovelace-card",
+              library_version: "0.1.39",
+              platform: "home-assistant",
+            },
           },
         }));
+        this.pingTimer = window.setInterval(() => {
+          if (this.channel?.readyState === "open") this.channel.send(`ping ${Date.now()}`);
+        }, 1000);
       };
 
       peer.ontrack = (event) => {
         if (event.track.kind !== "audio") return;
-        this.audio.srcObject = event.streams[0] || new MediaStream([event.track]);
-        this.audio.play().catch(() => {});
+        this.remoteStream = event.streams[0] || new MediaStream([event.track]);
+        this.attachAudio();
       };
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === "connected") {
@@ -185,6 +200,7 @@ class PipecatAssistCard extends HTMLElement {
       await peer.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
       this.detail = "Connecting audio";
       this.render();
+      this.attachAudio();
     } catch (err) {
       const name = err?.name || "";
       const message = name === "NotAllowedError"
@@ -194,9 +210,28 @@ class PipecatAssistCard extends HTMLElement {
     }
   }
 
+  attachAudio() {
+    if (!this.audio || !this.remoteStream) return;
+    if (this.audio.srcObject !== this.remoteStream) this.audio.srcObject = this.remoteStream;
+    this.audio.autoplay = true;
+    this.audio.playsInline = true;
+    this.audio.muted = false;
+    this.audio.volume = 1;
+    const playPromise = this.audio.play();
+    if (playPromise?.catch) {
+      playPromise.catch((err) => {
+        if (err?.name !== "NotAllowedError" || this.audioBlocked) return;
+        this.audioBlocked = true;
+        this.detail = "Audio is connected, but the browser blocked playback.";
+        this.render();
+      });
+    }
+  }
+
   render() {
     if (!this.shadowRoot) return;
     const running = ["requesting", "connecting", "connected"].includes(this.state);
+    const needsAudioTap = running && this.audioBlocked;
     this.shadowRoot.innerHTML = `
       <style>
         ha-card {
@@ -260,6 +295,18 @@ class PipecatAssistCard extends HTMLElement {
           cursor: pointer;
           transition: transform 140ms ease, filter 140ms ease;
         }
+        .actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        button.secondary {
+          color: var(--primary-text-color);
+          background: var(--secondary-background-color);
+          box-shadow: inset 0 0 0 1px var(--divider-color);
+        }
         button:hover { transform: translateY(-1px); filter: brightness(1.03); }
         button:active { transform: scale(0.98); }
         audio { display: none; }
@@ -274,7 +321,10 @@ class PipecatAssistCard extends HTMLElement {
                 <span>${this.detail}</span>
               </div>
             </div>
-            <button>${running ? "Stop" : "Talk"}</button>
+            <div class="actions">
+              ${needsAudioTap ? "<button class=\"secondary audio-button\">Enable audio</button>" : ""}
+              <button class="main-button">${running ? "Stop" : "Talk"}</button>
+            </div>
           </div>
           <div class="bars" aria-hidden="true">
             ${[0, 1, 2, 3, 4, 5, 6].map((item) => `<span style="--delay:${item * 90}ms"></span>`).join("")}
@@ -284,7 +334,17 @@ class PipecatAssistCard extends HTMLElement {
       </ha-card>
     `;
     this.audio = this.shadowRoot.querySelector("audio");
-    this.shadowRoot.querySelector("button").onclick = () => running ? this.stop() : this.start();
+    this.attachAudio();
+    const audioButton = this.shadowRoot.querySelector(".audio-button");
+    if (audioButton) {
+      audioButton.onclick = () => {
+        this.audioBlocked = false;
+        this.detail = "Connected. Speak to Pipecat Assist.";
+        this.render();
+        this.attachAudio();
+      };
+    }
+    this.shadowRoot.querySelector(".main-button").onclick = () => running ? this.stop() : this.start();
   }
 }
 
