@@ -16,6 +16,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import CONF_FLOW_ID, CONF_TOKEN, CONF_URL
 
 
+async def _response_payload(response: aiohttp.ClientResponse) -> dict:
+    """Return JSON when available, falling back to response text."""
+
+    try:
+        data = await response.json()
+        return data if isinstance(data, dict) else {"detail": str(data)}
+    except (aiohttp.ContentTypeError, ValueError):
+        return {"detail": await response.text()}
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -70,7 +80,7 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
                     json=payload,
                     headers=headers,
                 ) as http_response:
-                    data = await http_response.json()
+                    data = await _response_payload(http_response)
                     if http_response.status >= 400:
                         response.async_set_error(
                             intent.IntentResponseErrorCode.UNKNOWN,

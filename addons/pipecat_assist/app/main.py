@@ -107,6 +107,7 @@ TTS_MEDIA_TYPES = {
 }
 HA_STT_BRIDGE_KINDS = {"deepgram", "gemini", "gemini_cloud", "openai", "openai_cloud"}
 HA_TTS_BRIDGE_KINDS = {"elevenlabs", "gemini", "gemini_cloud", "openai", "openai_cloud"}
+PROVIDER_RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 app.mount("/assets", StaticFiles(directory=UI_DIR), name="assets")
 
@@ -197,11 +198,98 @@ async def _gemini_generate_content(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{quote(_gemini_model_path(model), safe='')}:generateContent"
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        response = await client.post(url, params={"key": api_key}, json=payload)
-        response.raise_for_status()
+    async def request() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(url, params={"key": api_key}, json=payload)
+            response.raise_for_status()
+            return response
+
+    response = await _provider_call("Gemini", request)
     data = response.json()
     return data if isinstance(data, dict) else {}
+
+
+def _provider_status(err: Exception) -> int | None:
+    response = getattr(err, "response", None)
+    status = getattr(response, "status_code", None) or getattr(err, "status_code", None)
+    try:
+        return int(status) if status else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_body(err: Exception) -> Any:
+    body = getattr(err, "body", None)
+    if body:
+        return body
+    response = getattr(err, "response", None)
+    if response is None:
+        return None
+    with suppress(Exception):
+        return response.json()
+    with suppress(Exception):
+        return response.text
+    return None
+
+
+def _provider_message_from_body(body: Any) -> str:
+    if isinstance(body, list):
+        return "; ".join(filter(None, (_provider_message_from_body(item) for item in body)))
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("status") or error.get("code") or "").strip()
+        if isinstance(error, str):
+            return error.strip()
+        return str(body.get("message") or body.get("detail") or "").strip()
+    if isinstance(body, str):
+        return body.strip()
+    return ""
+
+
+def _provider_safe_detail(label: str, err: Exception) -> str:
+    status = _provider_status(err)
+    message = _provider_message_from_body(_provider_body(err)) or str(err).split(" for url ")[0]
+    message = message.replace("\n", " ").strip()
+    if status:
+        return f"{label} failed with HTTP {status}: {message}"
+    return f"{label} failed: {message}"
+
+
+def _provider_http_exception(label: str, err: Exception) -> HTTPException:
+    if isinstance(err, HTTPException):
+        return err
+    status = _provider_status(err)
+    http_status = status if status in {400, 401, 403, 404, 408, 409, 422, 429, 500, 502, 503, 504} else 502
+    if http_status >= 500:
+        http_status = 503
+    return HTTPException(status_code=http_status, detail=_provider_safe_detail(label, err))
+
+
+def _provider_retryable(err: Exception) -> bool:
+    status = _provider_status(err)
+    return bool(status in PROVIDER_RETRY_STATUSES)
+
+
+async def _provider_call(label: str, request, attempts: int = 3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return await request()
+        except HTTPException:
+            raise
+        except Exception as err:
+            if attempt >= attempts or not _provider_retryable(err):
+                raise _provider_http_exception(label, err) from err
+            logger.warning(
+                "{} attempt {}/{} failed, retrying: {}",
+                label,
+                attempt,
+                attempts,
+                _provider_safe_detail(label, err),
+            )
+            await asyncio.sleep(min(2.0, 0.35 * (2 ** (attempt - 1))))
+
+    raise HTTPException(status_code=503, detail=f"{label} failed after retries")
 
 
 def _gemini_text(data: dict[str, Any]) -> str:
@@ -495,14 +583,17 @@ async def api_conversation(payload: dict[str, Any]):
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
     config = STORE.load()
-    return await run_text_conversation(
-        config,
-        text=text,
-        language=payload.get("language"),
-        conversation_id=payload.get("conversation_id"),
-        flow_id=payload.get("flow_id"),
-        mcp_token=config.effective_mcp_token,
-    )
+    async def request():
+        return await run_text_conversation(
+            config,
+            text=text,
+            language=payload.get("language"),
+            conversation_id=payload.get("conversation_id"),
+            flow_id=payload.get("flow_id"),
+            mcp_token=config.effective_mcp_token,
+        )
+
+    return await _provider_call("HA Assist conversation", request, attempts=1)
 
 
 @app.post("/api/assist/stt")
@@ -525,11 +616,14 @@ async def api_stt(request: Request, flow_id: str | None = None):
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=_integration_api_key_or_400(integration, "STT", config.openai_api_key))
-        result = await client.audio.transcriptions.create(
-            file=("speech.wav", BytesIO(stt_audio), stt_content_type),
-            model=model or DEFAULT_OPENAI_STT_MODEL,
-            language=_runtime_language(flow, integration) or None,
-        )
+        async def request_openai_stt():
+            return await client.audio.transcriptions.create(
+                file=("speech.wav", BytesIO(stt_audio), stt_content_type),
+                model=model or DEFAULT_OPENAI_STT_MODEL,
+                language=_runtime_language(flow, integration) or None,
+            )
+
+        result = await _provider_call(f"{integration.name} STT", request_openai_stt)
         return {"text": (getattr(result, "text", "") or "").strip()}
 
     if integration.kind in {"gemini", "gemini_cloud"}:
@@ -567,9 +661,18 @@ async def api_stt(request: Request, flow_id: str | None = None):
             "Content-Type": stt_content_type,
         }
         params = {"model": model or DEFAULT_DEEPGRAM_MODEL, "smart_format": "true"}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post("https://api.deepgram.com/v1/listen", params=params, headers=headers, content=stt_audio)
-            response.raise_for_status()
+        async def request_deepgram_stt() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.deepgram.com/v1/listen",
+                    params=params,
+                    headers=headers,
+                    content=stt_audio,
+                )
+                response.raise_for_status()
+                return response
+
+        response = await _provider_call("Deepgram STT", request_deepgram_stt)
         data = response.json()
         transcript = (
             data.get("results", {})
@@ -607,13 +710,16 @@ async def api_tts(payload: dict[str, Any]):
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=_integration_api_key_or_400(integration, "TTS", config.openai_api_key))
-        result = await client.audio.speech.create(
-            model=model or DEFAULT_OPENAI_TTS_MODEL,
-            voice=voice or DEFAULT_OPENAI_TTS_VOICE,
-            input=text,
-            response_format=response_format,
-            speed=_runtime_speed(flow, integration),
-        )
+        async def request_openai_tts():
+            return await client.audio.speech.create(
+                model=model or DEFAULT_OPENAI_TTS_MODEL,
+                voice=voice or DEFAULT_OPENAI_TTS_VOICE,
+                input=text,
+                response_format=response_format,
+                speed=_runtime_speed(flow, integration),
+            )
+
+        result = await _provider_call(f"{integration.name} TTS", request_openai_tts)
         return Response(
             content=result.content,
             media_type=TTS_MEDIA_TYPES.get(response_format, "audio/mpeg"),
@@ -649,13 +755,17 @@ async def api_tts(payload: dict[str, Any]):
             "Content-Type": "application/json",
             "Accept": "audio/mpeg",
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                url,
-                headers=headers,
-                json={"text": text, "model_id": model or DEFAULT_ELEVENLABS_MODEL},
-            )
-            response.raise_for_status()
+        async def request_elevenlabs_tts() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json={"text": text, "model_id": model or DEFAULT_ELEVENLABS_MODEL},
+                )
+                response.raise_for_status()
+                return response
+
+        response = await _provider_call("ElevenLabs TTS", request_elevenlabs_tts)
         return Response(content=response.content, media_type="audio/mpeg", headers={"X-Audio-Extension": "mp3"})
 
     raise HTTPException(

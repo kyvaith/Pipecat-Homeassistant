@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.38
+
+- Added safe provider error handling for HA Assist STT, TTS, and conversation
+  calls so transient provider failures such as Gemini 503 no longer crash the
+  add-on or leak request URLs into tracebacks.
+- Added retries for HA Assist STT/TTS provider calls.
+- Improved the Home Assistant conversation entity to read text error responses
+  from the add-on instead of reporting them as unreachable JSON decode errors.
+
 ## 0.1.37
 
 - Fixed HA Assist STT/TTS failures when the active pipeline is speech-to-speech
