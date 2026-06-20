@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.40
+
+- Added early silence detection to the Home Assistant STT bridge so classic HA
+  Assist audio requests do not wait for Home Assistant to close a long stream
+  before transcription starts.
+- Fixed HA Assist text conversations for OpenAI Cloud composed pipelines by
+  choosing a provider-compatible model from the active LLM integration instead
+  of reusing stale Gemini flow defaults.
+- Replaced the default Gemini text fallback with `gemini-2.5-flash` and
+  migrated saved `gemini-3.5-flash` defaults.
+
 ## 0.1.39
 
 - Fixed Lovelace WebRTC card playback by preserving the remote audio stream

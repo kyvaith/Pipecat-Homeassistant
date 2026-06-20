@@ -10,7 +10,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from app.config import DEFAULT_GEMINI_TEXT_MODEL, DEFAULT_WEB_SEARCH_MODEL, RuntimeConfig
+from app.config import (
+    DEFAULT_GEMINI_TEXT_MODEL,
+    DEFAULT_OPENAI_TEXT_MODEL,
+    DEFAULT_WEB_SEARCH_MODEL,
+    RuntimeConfig,
+)
 from app.mcp_bridge import HomeAssistantMCPBridge
 from app.web_search_tool import WEB_SEARCH_TOOL_NAME, run_gemini_web_search, run_openai_web_search
 
@@ -47,11 +52,38 @@ def _tool_args(raw: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _text_model(config: RuntimeConfig, provider_kind: str, integration, flow) -> str:
-    model = flow.text_model or (integration.default_model if integration else "") or config.text_model
-    if provider_kind in {"gemini", "gemini_cloud"} and (not model or model.startswith(("gpt-", "claude-"))):
+def _model_compatible(provider_kind: str, model: str) -> bool:
+    clean = (model or "").strip().removeprefix("models/")
+    if not clean:
+        return False
+    if provider_kind in {"openai", "openai_cloud"}:
+        return not clean.startswith(("gemini-", "claude-", "amazon."))
+    if provider_kind in {"gemini", "gemini_cloud"}:
+        return clean.startswith("gemini-")
+    return True
+
+
+def _provider_default_model(config: RuntimeConfig, provider_kind: str, integration) -> str:
+    if provider_kind in {"openai", "openai_cloud"}:
+        return (integration.default_model if integration else "") or DEFAULT_OPENAI_TEXT_MODEL
+    if provider_kind in {"gemini", "gemini_cloud"}:
         return (integration.default_model if integration else "") or DEFAULT_GEMINI_TEXT_MODEL
-    return model
+    return (integration.default_model if integration else "") or config.text_model or DEFAULT_OPENAI_TEXT_MODEL
+
+
+def _text_model(config: RuntimeConfig, provider_kind: str, integration, flow) -> str:
+    step = flow.model_step()
+    candidates = [
+        getattr(step, "model", "") if step else "",
+        integration.default_model if integration else "",
+        flow.text_model,
+        config.text_model,
+    ]
+    for candidate in candidates:
+        model = str(candidate or "").strip()
+        if _model_compatible(provider_kind, model):
+            return model
+    return _provider_default_model(config, provider_kind, integration)
 
 
 def _web_search_step(flow):

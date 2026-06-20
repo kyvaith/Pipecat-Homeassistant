@@ -142,7 +142,7 @@ const API = {
 };
 
 const REDACTED = "__redacted__";
-const GEMINI_TEXT_MODEL = "gemini-3.5-flash";
+const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
 const GEMINI_LIVE_MODEL = "models/gemini-3.1-flash-live-preview";
 const GEMINI_LIVE_VOICE = "Charon";
 const OPENAI_TEXT_MODEL = "gpt-5.4-mini";
@@ -4263,7 +4263,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
                 about: {
                   library: "pipecat-assist-ui",
-                  library_version: "0.1.39",
+                  library_version: "0.1.40",
                   platform: "browser",
                 },
             },

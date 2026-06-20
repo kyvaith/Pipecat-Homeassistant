@@ -10,6 +10,8 @@ from loguru import logger
 from openai import AsyncOpenAI
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
+from app.config import DEFAULT_GEMINI_TEXT_MODEL
+
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
 
@@ -46,7 +48,7 @@ async def run_gemini_web_search(api_key: str, model: str, query: str) -> str:
     if not query:
         return "No search query was provided."
 
-    model_name = (model or "gemini-3.5-flash").removeprefix("models/")
+    model_name = (model or DEFAULT_GEMINI_TEXT_MODEL).removeprefix("models/")
     prompt = (
         "Answer in at most 2 short sentences suitable for being read aloud, "
         "in the same language as the question. Do not include URLs, citations, "

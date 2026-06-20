@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
+import sys
+from array import array
 from collections.abc import AsyncIterable
 
 import aiohttp
@@ -17,6 +21,111 @@ from .const import CONF_FLOW_ID, CONF_TOKEN, CONF_URL, SUPPORTED_LANGUAGES
 DEFAULT_SAMPLE_RATE = int(stt.AudioSampleRates.SAMPLERATE_16000)
 DEFAULT_BIT_RATE = int(stt.AudioBitRates.BITRATE_16)
 DEFAULT_CHANNELS = int(stt.AudioChannels.CHANNEL_MONO)
+STREAM_TIMEOUT_SECONDS = 30.0
+PCM_SPEECH_RMS_THRESHOLD = 0.012
+PCM_MIN_SPEECH_SECONDS = 0.2
+PCM_END_SILENCE_SECONDS = 1.1
+PCM_INITIAL_SILENCE_SECONDS = 8.0
+PCM_MAX_AUDIO_SECONDS = 25.0
+
+
+def _metadata_value(value) -> str:
+    """Return the raw enum value Home Assistant exposes for speech metadata."""
+
+    return str(getattr(value, "value", value) or "").lower()
+
+
+def _pcm16_payload(chunk: bytes) -> bytes:
+    """Return PCM payload, skipping a WAV header when HA includes one."""
+
+    if chunk.startswith(b"RIFF"):
+        data_index = chunk.find(b"data")
+        if data_index >= 0 and len(chunk) >= data_index + 8:
+            return chunk[data_index + 8 :]
+    return chunk
+
+
+def _pcm16_rms(chunk: bytes) -> float:
+    """Return normalized RMS for little-endian 16-bit PCM audio."""
+
+    payload = _pcm16_payload(chunk)
+    length = len(payload) - (len(payload) % 2)
+    if length <= 0:
+        return 0.0
+    samples = array("h")
+    samples.frombytes(payload[:length])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return 0.0
+    stride = max(1, len(samples) // 4096)
+    total = 0
+    count = 0
+    for sample in samples[::stride]:
+        total += sample * sample
+        count += 1
+    return math.sqrt(total / max(1, count)) / 32768.0
+
+
+def _chunk_seconds(chunk: bytes, sample_rate: int, bit_rate: int, channels: int) -> float:
+    byte_rate = max(1, sample_rate * max(1, channels) * max(1, bit_rate // 8))
+    return len(_pcm16_payload(chunk)) / byte_rate
+
+
+def _can_detect_pcm_silence(metadata: stt.SpeechMetadata) -> bool:
+    codec = _metadata_value(metadata.codec)
+    return (
+        (codec == "pcm" or codec.endswith(".pcm"))
+        and int(metadata.bit_rate or DEFAULT_BIT_RATE) == 16
+        and int(metadata.channel or DEFAULT_CHANNELS) == 1
+    )
+
+
+async def _collect_audio_stream(
+    metadata: stt.SpeechMetadata,
+    stream: AsyncIterable[bytes],
+) -> bytes:
+    """Collect HA Assist audio, ending early when PCM silence follows speech."""
+
+    sample_rate = int(metadata.sample_rate or DEFAULT_SAMPLE_RATE)
+    bit_rate = int(metadata.bit_rate or DEFAULT_BIT_RATE)
+    channels = int(metadata.channel or DEFAULT_CHANNELS)
+    use_pcm_vad = _can_detect_pcm_silence(metadata)
+    chunks: list[bytes] = []
+    total_seconds = 0.0
+    speech_seconds = 0.0
+    trailing_silence_seconds = 0.0
+
+    try:
+        async with asyncio.timeout(STREAM_TIMEOUT_SECONDS):
+            async for chunk in stream:
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                if not use_pcm_vad:
+                    continue
+
+                seconds = _chunk_seconds(chunk, sample_rate, bit_rate, channels)
+                total_seconds += seconds
+                if _pcm16_rms(chunk) >= PCM_SPEECH_RMS_THRESHOLD:
+                    speech_seconds += seconds
+                    trailing_silence_seconds = 0.0
+                elif speech_seconds >= PCM_MIN_SPEECH_SECONDS:
+                    trailing_silence_seconds += seconds
+
+                if (
+                    speech_seconds >= PCM_MIN_SPEECH_SECONDS
+                    and trailing_silence_seconds >= PCM_END_SILENCE_SECONDS
+                ):
+                    break
+                if speech_seconds <= 0 and total_seconds >= PCM_INITIAL_SILENCE_SECONDS:
+                    break
+                if total_seconds >= PCM_MAX_AUDIO_SECONDS:
+                    break
+    except TimeoutError:
+        pass
+
+    return b"".join(chunks)
 
 
 async def async_setup_entry(
@@ -99,10 +208,12 @@ class PipecatAssistSpeechToTextEntity(stt.SpeechToTextEntity):
         sample_rate = int(metadata.sample_rate or DEFAULT_SAMPLE_RATE)
         bit_rate = int(metadata.bit_rate or DEFAULT_BIT_RATE)
         channels = int(metadata.channel or DEFAULT_CHANNELS)
+        audio_format = _metadata_value(metadata.format) or "wav"
+        audio_codec = _metadata_value(metadata.codec) or "pcm"
         headers = {
-            "Content-Type": f"audio/{metadata.format}",
+            "Content-Type": f"audio/{audio_format}",
             "X-Speech-Content": (
-                f"format={metadata.format}; codec={metadata.codec}; "
+                f"format={audio_format}; codec={audio_codec}; "
                 f"sample_rate={sample_rate}; bit_rate={bit_rate}; "
                 f"channel={channels}; language={metadata.language}"
             ),
@@ -110,7 +221,7 @@ class PipecatAssistSpeechToTextEntity(stt.SpeechToTextEntity):
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        body = b"".join([chunk async for chunk in stream])
+        body = await _collect_audio_stream(metadata, stream)
         params = {}
         if flow_id := self._entry.data.get(CONF_FLOW_ID):
             params["flow_id"] = flow_id

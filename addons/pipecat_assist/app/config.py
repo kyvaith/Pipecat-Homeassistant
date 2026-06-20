@@ -21,7 +21,7 @@ DEFAULT_INSTRUCTIONS = (
     "device, or action is ambiguous, ask one short clarification."
 )
 
-DEFAULT_GEMINI_TEXT_MODEL = "gemini-3.5-flash"
+DEFAULT_GEMINI_TEXT_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_LIVE_MODEL = "models/gemini-3.1-flash-live-preview"
 DEFAULT_GEMINI_LIVE_VOICE = "Charon"
 DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
@@ -43,6 +43,10 @@ DEFAULT_AWS_BEDROCK_MODEL = "amazon.nova-pro-v1:0"
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
 DEFAULT_SONIOX_MODEL = "stt-rt-v5"
 DEFAULT_SPEECHMATICS_MODEL = "enhanced"
+LEGACY_GEMINI_TEXT_MODELS = {
+    "gemini-3.5-flash",
+    "models/gemini-3.5-flash",
+}
 OPENAI_REALTIME_VOICES = {
     "alloy",
     "ash",
@@ -491,7 +495,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 15
+    version: int = 16
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -784,6 +788,70 @@ def _is_composed_flow(flow: FlowConfig) -> bool:
     return flow.mode in {"composed", "classic"} or has_stt or has_tts
 
 
+def _clean_model_name(model: str | None) -> str:
+    return (model or "").strip()
+
+
+def _is_legacy_gemini_text_model(model: str | None) -> bool:
+    return _clean_model_name(model) in LEGACY_GEMINI_TEXT_MODELS
+
+
+def _looks_like_provider_mismatch(provider_kind: str, model: str | None) -> bool:
+    clean = _clean_model_name(model).removeprefix("models/")
+    if not clean:
+        return False
+    if provider_kind in {"openai", "openai_cloud"}:
+        return clean.startswith(("gemini-", "claude-", "amazon."))
+    if provider_kind in {"gemini", "gemini_cloud"}:
+        return clean.startswith(("gpt-", "o", "claude-", "amazon."))
+    return False
+
+
+def _repair_text_model_defaults(config: RuntimeConfig) -> bool:
+    """Replace stale text model defaults that are invalid for current providers."""
+
+    changed = False
+    gemini_default = os.getenv("GEMINI_TEXT_MODEL", DEFAULT_GEMINI_TEXT_MODEL)
+
+    if _is_legacy_gemini_text_model(config.text_model):
+        config.text_model = gemini_default
+        changed = True
+
+    for integration in config.integrations:
+        if integration.kind == "gemini_cloud" and (
+            not integration.default_model or _is_legacy_gemini_text_model(integration.default_model)
+        ):
+            integration.default_model = gemini_default
+            changed = True
+        if integration.kind == "openai_cloud" and _looks_like_provider_mismatch(
+            "openai_cloud",
+            integration.default_model,
+        ):
+            integration.default_model = os.getenv(
+                "OPENAI_TEXT_MODEL",
+                os.getenv("TEXT_MODEL", DEFAULT_OPENAI_TEXT_MODEL),
+            )
+            changed = True
+
+    for flow in config.flows:
+        if _is_legacy_gemini_text_model(flow.text_model):
+            flow.text_model = gemini_default
+            changed = True
+        for step in flow.steps:
+            if step.kind != "llm" or not step.model:
+                continue
+            integration = config.integration(step.integration_id)
+            provider_kind = integration.kind if integration else step.integration_id
+            if _is_legacy_gemini_text_model(step.model):
+                step.model = "" if provider_kind in {"openai", "openai_cloud"} else gemini_default
+                changed = True
+            elif _looks_like_provider_mismatch(provider_kind, step.model):
+                step.model = ""
+                changed = True
+
+    return changed
+
+
 def _repair_composed_openai_integrations(config: RuntimeConfig, flow: FlowConfig) -> bool:
     """Move composed OpenAI steps away from the speech-to-speech realtime integration."""
 
@@ -994,7 +1062,7 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
             gemini_cloud.api_key = gemini.api_key
             gemini_cloud.enabled = gemini.enabled
             changed = True
-        if not gemini_cloud.default_model:
+        if not gemini_cloud.default_model or _is_legacy_gemini_text_model(gemini_cloud.default_model):
             gemini_cloud.default_model = os.getenv("GEMINI_TEXT_MODEL", DEFAULT_GEMINI_TEXT_MODEL)
             changed = True
         if gemini_cloud.default_realtime_model:
@@ -1031,7 +1099,10 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
             openai_cloud.api_key = openai.api_key
             openai_cloud.enabled = openai.enabled
             changed = True
-        if not openai_cloud.default_model:
+        if not openai_cloud.default_model or _looks_like_provider_mismatch(
+            "openai_cloud",
+            openai_cloud.default_model,
+        ):
             openai_cloud.default_model = os.getenv(
                 "OPENAI_TEXT_MODEL",
                 os.getenv("TEXT_MODEL", DEFAULT_OPENAI_TEXT_MODEL),
@@ -1290,6 +1361,11 @@ class ConfigStore:
                 changed = _ensure_control_steps(flow) or changed
             changed = True
 
+        if config.version < 16:
+            config.version = 16
+            changed = _repair_text_model_defaults(config) or changed
+            changed = True
+
         for flow in config.flows:
             if not flow.language:
                 flow.language = "en"
@@ -1298,6 +1374,7 @@ class ConfigStore:
             changed = _repair_composed_gemini_integrations(config, flow) or changed
             changed = _repair_flow_provider_model(config, flow) or changed
             changed = _strip_unsupported_s2s_flow_steps(config, flow) or changed
+        changed = _repair_text_model_defaults(config) or changed
         changed = _repair_mcp_url_overrides(config) or changed
 
         if changed:
