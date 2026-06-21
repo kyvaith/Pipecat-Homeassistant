@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.46
+
+- Fixed the raw Gemini Live WebSocket setup payload used by the Home Assistant
+  Assist bridge. `responseModalities`, `speechConfig`, and `maxOutputTokens`
+  are now sent under `generationConfig`, matching the Live API schema.
+- Omitted unsupported raw Live `thinkingConfig` fields from the HA Assist
+  bridge setup to avoid `Unknown name` setup failures.
+
 ## 0.1.45
 
 - Added a Gemini Live turn bridge for Home Assistant Assist audio sessions.

@@ -1665,7 +1665,16 @@ def _gemini_live_ha_setup(
 ) -> dict[str, Any]:
     setup: dict[str, Any] = {
         "model": _gemini_model(_model_name(flow, integration, "gemini")),
-        "responseModalities": ["AUDIO"],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": _gemini_voice(flow, integration),
+                    }
+                }
+            },
+        },
         "systemInstruction": {
             "parts": [
                 {
@@ -1680,13 +1689,6 @@ def _gemini_live_ha_setup(
         },
         "inputAudioTranscription": {},
         "outputAudioTranscription": {},
-        "speechConfig": {
-            "voiceConfig": {
-                "prebuiltVoiceConfig": {
-                    "voiceName": _gemini_voice(flow, integration),
-                }
-            }
-        },
         "realtimeInputConfig": {
             "automaticActivityDetection": {
                 "disabled": True,
@@ -1694,11 +1696,7 @@ def _gemini_live_ha_setup(
         },
     }
     if flow.max_output_tokens:
-        setup["maxOutputTokens"] = flow.max_output_tokens
-    if flow.reasoning_effort:
-        setup["thinkingConfig"] = {
-            "thinkingLevel": "high" if flow.reasoning_effort == "xhigh" else flow.reasoning_effort
-        }
+        setup["generationConfig"]["maxOutputTokens"] = flow.max_output_tokens
     if tools_schema and tools_schema.standard_tools:
         setup["tools"] = [_gemini_live_tool_declarations(tools_schema)]
     return setup
