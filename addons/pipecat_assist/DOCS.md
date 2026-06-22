@@ -198,7 +198,7 @@ resource and then add a manual card:
 ```yaml
 lovelace:
   resources:
-    - url: /pipecat_assist/pipecat-assist-card.js?v=0.1.72
+    - url: /pipecat_assist/pipecat-assist-card.js?v=0.1.73
       type: module
 ```
 

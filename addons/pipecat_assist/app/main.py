@@ -33,6 +33,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.frameworks.rtvi import RTVIObserverParams
 from pipecat.runner.run import app, main as runner_main
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
@@ -2627,6 +2628,21 @@ def _transport_params(flow: FlowConfig) -> dict[str, Any]:
     }
 
 
+def _rtvi_observer_params() -> RTVIObserverParams:
+    """Expose live transcript and assistant text events to the WebRTC clients."""
+
+    return RTVIObserverParams(
+        bot_output_enabled=True,
+        bot_llm_enabled=True,
+        bot_tts_enabled=True,
+        bot_speaking_enabled=True,
+        user_llm_enabled=True,
+        user_speaking_enabled=True,
+        user_transcription_enabled=True,
+        metrics_enabled=True,
+    )
+
+
 def _output_step(flow: FlowConfig):
     return next(
         (step for step in flow.steps if step.kind in {"output", "tts"} and step.enabled),
@@ -4858,6 +4874,7 @@ async def run_bot(
         worker = PipelineWorker(
             pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            rtvi_observer_params=_rtvi_observer_params(),
             idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         )
 
@@ -4961,6 +4978,7 @@ async def run_bot(
         worker = PipelineWorker(
             pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            rtvi_observer_params=_rtvi_observer_params(),
             idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         )
         flow_manager = None

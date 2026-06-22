@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.73
+
+- Make RTVI transcript and assistant text streams explicit for realtime
+  WebRTC sessions.
+- Prefer live LLM text over later TTS text in the assistant card, reducing
+  duplicated or late assistant captions.
+- Treat server-side Pipecat transcriptions as the source of truth and keep the
+  browser SpeechRecognition transcript as a fallback only.
+
 ## 0.1.72
 
 - Prevent composed realtime pipelines from selecting providers that are only

@@ -148,7 +148,7 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.1.72";
+const ASSISTANT_CARD_VERSION = "0.1.73";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -428,10 +428,10 @@ function firstString(...values) {
 }
 
 function rtviAssistantTextPriority(type) {
-  if (type === "bot-output") return 4;
-  if (type === "bot-transcription") return 3;
-  if (type === "bot-tts-text") return 2;
-  if (type === "bot-llm-text") return 1;
+  if (type === "bot-llm-text") return 4;
+  if (type === "bot-output") return 3;
+  if (type === "bot-transcription") return 2;
+  if (type === "bot-tts-text") return 1;
   if (type.startsWith("assistant-")) return 2;
   return 0;
 }
@@ -4803,6 +4803,7 @@ function VoiceTest({ config, flow }) {
   const localSpeechEndingRef = useRef(false);
   const localSpeechPausedForAssistantRef = useRef(false);
   const localSpeechResumeTimerRef = useRef(null);
+  const serverTranscriptionActiveRef = useRef(false);
   const scrollFrameRef = useRef(null);
   const scrollPosRef = useRef(0);
   const scrollTargetRef = useRef(0);
@@ -4958,6 +4959,7 @@ function VoiceTest({ config, flow }) {
     lastUserTextAtRef.current = 0;
     botSpeakingRef.current = false;
     ignoreLocalSpeechUntilRef.current = 0;
+    serverTranscriptionActiveRef.current = false;
     clearEndConversationRequest();
     currentUserMessageIdRef.current = "";
     currentAssistantMessageIdRef.current = "";
@@ -5180,6 +5182,7 @@ function VoiceTest({ config, flow }) {
   function startLocalSpeechRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
+    if (serverTranscriptionActiveRef.current) return;
     if (localSpeechPausedForAssistantRef.current || assistantTurnActiveRef.current || botSpeakingRef.current) return;
     stopLocalSpeechRecognition();
     try {
@@ -5483,6 +5486,11 @@ function VoiceTest({ config, flow }) {
       || Boolean(message.data?.final || message.is_final || message.final);
 
     if (isRtviUserTextType(type)) {
+      if (type === "user-transcription") {
+        serverTranscriptionActiveRef.current = true;
+        stopLocalSpeechRecognition();
+        cancelLocalSpeechResume();
+      }
       applyUserText(text, finalEvent);
       return;
     }
