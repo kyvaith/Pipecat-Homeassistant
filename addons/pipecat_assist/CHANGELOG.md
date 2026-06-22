@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.64
+
+- Keep the Lovelace card at a fixed height while transcript text scrolls inside
+  the individual user and assistant bubbles.
+- Prefer higher-quality final assistant captions over fragmented streaming
+  partials to avoid repeated or split words in the card transcript.
+- Route browser speech-recognition captions through the same echo filter as
+  RTVI captions so assistant audio is less likely to appear as user text.
+
 ## 0.1.63
 
 - Keep the Lovelace card height stable by scrolling longer transcripts inside

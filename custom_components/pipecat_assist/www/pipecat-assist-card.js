@@ -1,4 +1,4 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.1.63";
+const PIPECAT_ASSIST_CARD_VERSION = "0.1.64";
 const DEFAULT_ACCENT_HEX = "#206cff";
 const DEFAULT_AUDIO_BUFFER_MS = 120;
 const HA_ASSIST_SAMPLE_RATE_FALLBACK = 48000;
@@ -123,6 +123,91 @@ function transcriptWords(value) {
     .filter((word) => word.length > 2);
 }
 
+function transcriptTokenParts(value) {
+  const text = normalizeTranscriptText(value);
+  return [...text.matchAll(/\p{L}[\p{L}\p{N}]*/gu)]
+    .map((match) => ({
+      text: match[0],
+      compact: compactTranscript(match[0]),
+      start: match.index,
+      end: match.index + match[0].length,
+    }))
+    .filter((token) => token.compact);
+}
+
+function transcriptWordSimilarity(left, right) {
+  const leftWords = new Set(transcriptWords(left));
+  const rightWords = new Set(transcriptWords(right));
+  if (!leftWords.size || !rightWords.size) return 0;
+  let matched = 0;
+  for (const word of leftWords) {
+    if (rightWords.has(word)) matched += 1;
+  }
+  return matched / Math.min(leftWords.size, rightWords.size);
+}
+
+function fragmentedTranscriptScore(value) {
+  return normalizeTranscriptText(value)
+    .split(/\s+/)
+    .filter((part) => /^\p{L}$/u.test(part))
+    .length;
+}
+
+function isLikelyTranscriptReplacement(existing, incoming) {
+  const current = normalizeTranscriptText(existing);
+  const text = normalizeTranscriptText(incoming);
+  if (!current || !text) return false;
+  const currentCompact = compactTranscript(current);
+  const textCompact = compactTranscript(text);
+  if (textCompact === currentCompact) return true;
+  if (textCompact.startsWith(currentCompact) && text.length >= current.length) return true;
+  if (currentCompact.includes(textCompact) && textCompact.length < currentCompact.length * 0.72) return false;
+
+  const similarity = transcriptWordSimilarity(current, text);
+  const currentFragmented = fragmentedTranscriptScore(current);
+  const incomingFragmented = fragmentedTranscriptScore(text);
+  if (hasTerminalTranscriptPunctuation(text) && similarity >= 0.52 && text.length >= current.length * 0.55) return true;
+  if (currentFragmented >= incomingFragmented + 2 && similarity >= 0.4) return true;
+  return similarity >= 0.72 && text.length >= current.length * 0.75 && incomingFragmented <= currentFragmented;
+}
+
+function mergeDisplayTurnText(existing, incoming) {
+  const current = normalizeTranscriptText(existing);
+  const text = normalizeTranscriptText(incoming);
+  if (!text) return current;
+  if (!current || isLikelyTranscriptReplacement(current, text)) return text;
+  if (isTranscriptFragment(text, current)) return current;
+  return mergeTranscript(current, text);
+}
+
+function removeTranscriptEchoSpan(text, reference) {
+  const cleanText = normalizeTranscriptText(text);
+  const refTokens = transcriptTokenParts(reference);
+  const tokens = transcriptTokenParts(cleanText);
+  if (refTokens.length < 2 || tokens.length < 2) return cleanText;
+
+  let best = null;
+  for (let start = 0; start < tokens.length; start += 1) {
+    let length = 0;
+    while (
+      start + length < tokens.length
+      && length < refTokens.length
+      && tokens[start + length].compact === refTokens[length].compact
+    ) {
+      length += 1;
+    }
+    const enough = length >= Math.min(3, refTokens.length) || (refTokens.length === 2 && length === 2);
+    if (enough && length / refTokens.length >= 0.62 && (!best || length > best.length)) {
+      best = { start, length };
+    }
+  }
+
+  if (!best) return cleanText;
+  const first = tokens[best.start];
+  const last = tokens[best.start + best.length - 1];
+  return normalizeTranscriptText(`${cleanText.slice(0, first.start)} ${cleanText.slice(last.end)}`);
+}
+
 function isLikelyTranscriptEcho(text, reference) {
   const incoming = compactTranscript(text);
   const existing = compactTranscript(reference);
@@ -159,7 +244,11 @@ function mergeAssistantTurnText(existing, incoming, priority, currentPriority) {
   if (!current) return text;
 
   if (hasTerminalTranscriptPunctuation(current) && isTranscriptFragment(text, current)) return current;
-  if (priority > currentPriority && isTranscriptFragment(current, text)) return text;
+  if (priority > currentPriority) {
+    if (isTranscriptFragment(text, current) && !isLikelyTranscriptReplacement(current, text)) return current;
+    return text;
+  }
+  if (isLikelyTranscriptReplacement(current, text)) return text;
   return mergeTranscript(current, text);
 }
 
@@ -306,6 +395,8 @@ class PipecatAssistCard extends HTMLElement {
     this.userTranscript = "";
     this.assistantTranscript = "";
     this.partialTranscript = "";
+    this.currentUserText = "";
+    this.currentUserUpdatedAt = 0;
     this.assistantTurnBase = "";
     this.assistantTurnText = "";
     this.assistantTurnPriority = 0;
@@ -313,6 +404,7 @@ class PipecatAssistCard extends HTMLElement {
     this.assistantLastTurnText = "";
     this.assistantLastTurnPriority = 0;
     this.assistantLastTurnFinishedAt = 0;
+    this.lastAssistantTextAt = 0;
     this.lastUserTextAt = 0;
     this.botSpeaking = false;
     this.ignoreLocalSpeechUntil = 0;
@@ -655,18 +747,10 @@ class PipecatAssistCard extends HTMLElement {
           if (result.isFinal) finalText = mergeTranscript(finalText, text);
           else interimText = mergeTranscript(interimText, text);
         }
-        if (this.shouldIgnoreLocalSpeech(finalText || interimText)) return;
-        if (finalText) {
-          this.lastUserTextAt = Date.now();
-          this.userTranscript = mergeTranscript(this.userTranscript, finalText);
-        } else if (interimText) {
-          this.lastUserTextAt = Date.now();
-        }
-        this.partialTranscript = normalizeTranscriptText(interimText);
-        this.render();
-        if (shouldEndConversation(`${this.userTranscript} ${this.partialTranscript}`)) {
-          window.setTimeout(() => this.stop(), 250);
-        }
+        const spokenText = finalText || interimText;
+        if (this.shouldIgnoreLocalSpeech(spokenText)) return;
+        if (finalText) this.applyUserText(finalText, true);
+        else if (interimText) this.applyUserText(interimText, false);
       };
       recognition.onerror = () => {
         this.partialTranscript = "";
@@ -821,6 +905,8 @@ class PipecatAssistCard extends HTMLElement {
       this.userTranscript = "";
       this.assistantTranscript = "";
       this.partialTranscript = "";
+      this.currentUserText = "";
+      this.currentUserUpdatedAt = 0;
       this.assistantTurnBase = "";
       this.assistantTurnText = "";
       this.assistantTurnPriority = 0;
@@ -828,6 +914,7 @@ class PipecatAssistCard extends HTMLElement {
       this.assistantLastTurnText = "";
       this.assistantLastTurnPriority = 0;
       this.assistantLastTurnFinishedAt = 0;
+      this.lastAssistantTextAt = 0;
       this.lastUserTextAt = 0;
       this.botSpeaking = false;
       this.ignoreLocalSpeechUntil = 0;
@@ -977,6 +1064,7 @@ class PipecatAssistCard extends HTMLElement {
       this.assistantLastTurnText = this.assistantTurnText;
       this.assistantLastTurnPriority = this.assistantTurnPriority;
       this.assistantLastTurnFinishedAt = Date.now();
+      this.lastAssistantTextAt = this.assistantLastTurnFinishedAt;
     }
     this.assistantTurnText = "";
     this.assistantTurnPriority = 0;
@@ -999,6 +1087,22 @@ class PipecatAssistCard extends HTMLElement {
     if (!this.assistantTurnActive) this.beginAssistantTurn();
   }
 
+  assistantEchoReferences() {
+    return [
+      this.assistantTurnText,
+      this.assistantLastTurnText,
+      this.assistantTranscript,
+    ].filter(Boolean);
+  }
+
+  cleanUserSpeechText(text) {
+    let cleaned = normalizeTranscriptText(text);
+    for (const reference of this.assistantEchoReferences()) {
+      cleaned = removeTranscriptEchoSpan(cleaned, reference);
+    }
+    return cleaned;
+  }
+
   shouldIgnoreLocalSpeech(text) {
     if (!text) return false;
     const assistantReference = mergeTranscript(this.assistantTranscript, this.assistantTurnText);
@@ -1008,22 +1112,35 @@ class PipecatAssistCard extends HTMLElement {
   }
 
   applyUserText(text, finalEvent) {
-    if (isLikelyTranscriptEcho(text, this.assistantTranscript)) return;
-    this.lastUserTextAt = Date.now();
+    const cleanedText = this.cleanUserSpeechText(text);
+    if (!cleanedText) return;
+    if (this.assistantEchoReferences().some((reference) => isLikelyTranscriptEcho(cleanedText, reference))) return;
+    const now = Date.now();
+    this.lastUserTextAt = now;
+    const startsNewUserTurn = this.lastAssistantTextAt > this.currentUserUpdatedAt
+      || (!this.partialTranscript && this.currentUserUpdatedAt && now - this.currentUserUpdatedAt > 8000);
     if (finalEvent) {
-      this.userTranscript = mergeTranscript(this.userTranscript, text);
+      this.currentUserText = startsNewUserTurn
+        ? cleanedText
+        : mergeDisplayTurnText(this.currentUserText, cleanedText);
+      this.currentUserUpdatedAt = now;
+      this.userTranscript = mergeTranscript(this.userTranscript, cleanedText);
       this.partialTranscript = "";
     } else {
-      this.partialTranscript = normalizeTranscriptText(text);
+      this.partialTranscript = cleanedText;
+      this.currentUserText = startsNewUserTurn
+        ? cleanedText
+        : mergeDisplayTurnText(this.currentUserText, cleanedText);
+      this.currentUserUpdatedAt = now;
     }
     this.render();
-    if (shouldEndConversation(`${this.userTranscript} ${this.partialTranscript}`)) {
+    if (shouldEndConversation(`${this.currentUserText} ${this.partialTranscript}`)) {
       window.setTimeout(() => this.stop(), 450);
     }
   }
 
   applyAssistantText(text, priority) {
-    if (isLikelyTranscriptEcho(text, mergeTranscript(this.userTranscript, this.partialTranscript))) return;
+    if (isLikelyTranscriptEcho(text, mergeTranscript(this.currentUserText, this.partialTranscript))) return;
     const normalizedText = normalizeTranscriptText(text);
     if (!normalizedText) return;
     const now = Date.now();
@@ -1063,11 +1180,22 @@ class PipecatAssistCard extends HTMLElement {
       return;
     }
     this.assistantTranscript = mergeTranscript(this.assistantTurnBase, this.assistantTurnText);
+    this.lastAssistantTextAt = Date.now();
     this.ignoreLocalSpeechUntil = Date.now() + 1200;
     this.render();
     if (shouldEndConversation(this.assistantTranscript)) {
       window.setTimeout(() => this.stop(), 650);
     }
+  }
+
+  displayUserText() {
+    return mergeDisplayTurnText(this.currentUserText, this.partialTranscript);
+  }
+
+  displayAssistantText(running) {
+    return this.assistantTurnText
+      || this.assistantLastTurnText
+      || (running ? "Listening..." : "Ready when you are.");
   }
 
   handleRealtimeMessage(raw) {
@@ -1132,19 +1260,22 @@ class PipecatAssistCard extends HTMLElement {
     const accentRgb = `${accent.r}, ${accent.g}, ${accent.b}`;
     const statusLabel = this.statusLabel();
     const statusDetail = this.statusDetail(statusLabel);
-    const userText = mergeTranscript(this.userTranscript, this.partialTranscript);
-    const assistantText = this.assistantTranscript || (running ? "Listening..." : "Ready when you are.");
+    const userText = this.displayUserText();
+    const assistantText = this.displayAssistantText(running);
     const transcriptHtml = compact ? "" : `
-          <div class="transcript-frame">
-            <div class="transcript-scroll" aria-live="polite">
-              ${userText ? `<div class="message user">${escapeHtml(userText)}</div>` : ""}
-              <div class="message assistant">${escapeHtml(assistantText)}</div>
+          <div class="${userText ? "transcript-frame" : "transcript-frame no-user"}" aria-live="polite">
+            ${userText ? `<div class="message user"><div class="message-text">${escapeHtml(userText)}</div></div>` : ""}
+            <div class="message assistant">
+              <div class="message-text">${escapeHtml(assistantText)}</div>
             </div>
           </div>`;
     this.shadowRoot.innerHTML = `
       <style>
         ha-card {
           display: block;
+          height: ${compact ? "286px" : "410px"};
+          max-height: ${compact ? "286px" : "410px"};
+          box-sizing: border-box;
           overflow: hidden;
           border-radius: 20px;
           background:
@@ -1157,16 +1288,18 @@ class PipecatAssistCard extends HTMLElement {
         }
         .wrap {
           display: grid;
-          grid-template-rows: auto auto minmax(96px, auto) 174px;
-          min-height: 352px;
-          gap: 12px;
-          padding: 24px 24px 0;
+          grid-template-rows: auto auto 128px minmax(0, 1fr);
+          height: 100%;
+          max-height: 410px;
+          box-sizing: border-box;
+          gap: 10px;
+          padding: 20px 24px 0;
           position: relative;
           overflow: hidden;
         }
         .wrap.compact {
-          grid-template-rows: auto auto 174px;
-          min-height: 270px;
+          grid-template-rows: auto auto minmax(0, 1fr);
+          max-height: 286px;
         }
         .head, .actions, .session-status, .transcript-frame, .visualizer-shell, .version {
           position: relative;
@@ -1226,47 +1359,54 @@ class PipecatAssistCard extends HTMLElement {
           white-space: nowrap;
         }
         .transcript-frame {
+          display: grid;
+          grid-template-rows: 48px 70px;
+          gap: 10px;
           max-width: 100%;
-          min-height: 96px;
-          max-height: 142px;
+          height: 128px;
+          max-height: 128px;
           overflow: hidden;
         }
-        .transcript-scroll {
-          display: grid;
-          align-content: start;
-          gap: 9px;
-          max-height: 142px;
+        .transcript-frame.no-user {
+          grid-template-rows: 96px;
+          align-content: end;
+        }
+        .message-text {
+          min-height: 0;
+          max-height: 100%;
           overflow-y: auto;
-          padding: 3px 4px 18px 0;
-          scrollbar-width: thin;
-          scrollbar-color: rgba(${accentRgb}, 0.55) transparent;
-          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 22px), transparent 100%);
-          mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 22px), transparent 100%);
+          padding-right: 2px;
+          scroll-behavior: smooth;
+          scrollbar-width: none;
+          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
           font-size: 17px;
           line-height: 1.38;
           text-shadow: 0 1px 16px rgba(0, 0, 0, 0.35);
           overflow-wrap: anywhere;
         }
-        .transcript-scroll::-webkit-scrollbar { width: 4px; }
-        .transcript-scroll::-webkit-scrollbar-thumb {
-          border-radius: 999px;
-          background: rgba(${accentRgb}, 0.5);
-        }
-        .transcript-scroll::-webkit-scrollbar-track { background: transparent; }
+        .message-text::-webkit-scrollbar { display: none; }
         .message {
+          display: flex;
+          min-height: 0;
+          max-height: 100%;
           border-radius: 14px;
           padding: 9px 11px;
           backdrop-filter: blur(10px);
+          overflow: hidden;
         }
         .message.user {
           justify-self: start;
           max-width: min(92%, 560px);
+          width: fit-content;
           color: rgba(226, 239, 255, 0.68);
           background: rgba(255, 255, 255, 0.06);
           border: 1px solid rgba(255, 255, 255, 0.08);
         }
         .message.assistant {
           justify-self: stretch;
+          width: 100%;
+          box-sizing: border-box;
           color: #ffffff;
           font-weight: 700;
           background: linear-gradient(135deg, rgba(${accentRgb}, 0.18), rgba(255, 255, 255, 0.07));
@@ -1274,8 +1414,9 @@ class PipecatAssistCard extends HTMLElement {
         }
         .visualizer-shell {
           position: relative;
-          min-height: 174px;
-          margin: -18px -24px 0;
+          min-height: 0;
+          height: 156px;
+          margin: -10px -24px 0;
           overflow: hidden;
           align-self: end;
           -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 30px, #000 100%);
@@ -1285,7 +1426,7 @@ class PipecatAssistCard extends HTMLElement {
           content: "";
           position: absolute;
           left: 50%;
-          bottom: -92px;
+          bottom: -98px;
           width: 118%;
           height: 190px;
           transform: translateX(-50%);
@@ -1307,7 +1448,7 @@ class PipecatAssistCard extends HTMLElement {
         .visualizer {
           display: block;
           width: 100%;
-          height: 174px;
+          height: 156px;
           position: relative;
           z-index: 1;
         }
@@ -1367,8 +1508,12 @@ class PipecatAssistCard extends HTMLElement {
       </ha-card>
     `;
     this.audio = this.shadowRoot.querySelector("audio");
-    const transcript = this.shadowRoot.querySelector(".transcript-scroll");
-    if (transcript) transcript.scrollTop = transcript.scrollHeight;
+    this.shadowRoot.querySelectorAll(".message-text").forEach((node) => {
+      requestAnimationFrame(() => {
+        if (node.scrollTo) node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+        else node.scrollTop = node.scrollHeight;
+      });
+    });
     this.ensureVisualizer();
     this.attachAudio();
     const audioButton = this.shadowRoot.querySelector(".audio-button");
@@ -1419,6 +1564,11 @@ function refreshPipecatAssistCard(card) {
   card.userTranscript = card.userTranscript || "";
   card.partialTranscript = card.partialTranscript || "";
   card.assistantTranscript = card.assistantTranscript || "";
+  card.currentUserText = card.currentUserText || "";
+  card.currentUserUpdatedAt = card.currentUserUpdatedAt || 0;
+  card.assistantTurnText = card.assistantTurnText || "";
+  card.assistantLastTurnText = card.assistantLastTurnText || "";
+  card.lastAssistantTextAt = card.lastAssistantTextAt || 0;
   card.audioBlocked = Boolean(card.audioBlocked);
   if (!card.shadowRoot && card.attachShadow) {
     try {
