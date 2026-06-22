@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.71
+
+- Sanitize MCP JSON Schemas before exposing them as Pipecat/Gemini tools, so
+  richer HA MCP Server add-on schemas using keywords such as `propertyNames` or
+  `exclusiveMinimum` do not crash Gemini Live.
+- Keep MCP tool routing unchanged while simplifying unsupported validation
+  metadata for realtime model function calling.
+
 ## 0.1.70
 
 - Auto-detect the Home Assistant MCP Server add-on through the Supervisor API,

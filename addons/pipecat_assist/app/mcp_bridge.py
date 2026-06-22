@@ -28,6 +28,8 @@ class MCPAuthenticationError(RuntimeError):
 
 MCP_CALL_HISTORY: deque[dict[str, Any]] = deque(maxlen=100)
 MCP_TOOLS_SCHEMA_CACHE: dict[tuple[str, tuple[str, ...]], tuple[ToolsSchema, float]] = {}
+LLM_SCHEMA_SCALAR_TYPES = {"string", "number", "integer", "boolean", "object", "array"}
+LLM_SCHEMA_STRING_FIELDS = {"description", "format", "title"}
 
 
 def _compact_json(value: Any, limit: int = 1200) -> str:
@@ -60,6 +62,131 @@ def clear_mcp_tools_cache() -> None:
     """Clear cached MCP tool schemas."""
 
     MCP_TOOLS_SCHEMA_CACHE.clear()
+
+
+def _schema_type(value: Any) -> tuple[str, bool]:
+    if isinstance(value, str):
+        return (value.lower(), value.lower() == "null")
+    if isinstance(value, list):
+        nullable = any(str(item).lower() == "null" for item in value)
+        for item in value:
+            item_type = str(item).lower()
+            if item_type != "null":
+                return item_type, nullable
+        return "", nullable
+    return "", False
+
+
+def _sanitize_llm_schema(schema: Any) -> dict[str, Any]:
+    """Return a Gemini/Pipecat-compatible subset of JSON Schema."""
+
+    if not isinstance(schema, dict):
+        return {"type": "string"}
+
+    sanitized: dict[str, Any] = {}
+    schema_type, nullable = _schema_type(schema.get("type"))
+    if schema_type in LLM_SCHEMA_SCALAR_TYPES:
+        sanitized["type"] = schema_type
+    elif isinstance(schema.get("properties"), dict) or "additionalProperties" in schema or "propertyNames" in schema:
+        sanitized["type"] = "object"
+    elif isinstance(schema.get("items"), dict):
+        sanitized["type"] = "array"
+
+    for key in LLM_SCHEMA_STRING_FIELDS:
+        value = schema.get(key)
+        if isinstance(value, str) and value:
+            sanitized[key] = value
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list):
+        clean_enum = [
+            value
+            for value in enum_values
+            if isinstance(value, str | int | float | bool) or value is None
+        ]
+        if clean_enum:
+            sanitized["enum"] = clean_enum
+
+    if "const" in schema and "enum" not in sanitized:
+        const = schema.get("const")
+        if isinstance(const, str | int | float | bool) or const is None:
+            sanitized["enum"] = [const]
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        clean_properties = {
+            str(name): _sanitize_llm_schema(value)
+            for name, value in properties.items()
+            if isinstance(name, str)
+        }
+        if clean_properties:
+            sanitized["properties"] = clean_properties
+
+    required = schema.get("required")
+    if isinstance(required, list):
+        allowed_names = set(sanitized.get("properties", {}).keys())
+        clean_required = [
+            name
+            for name in required
+            if isinstance(name, str) and (not allowed_names or name in allowed_names)
+        ]
+        if clean_required:
+            sanitized["required"] = clean_required
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        sanitized["items"] = _sanitize_llm_schema(items)
+
+    any_of_items = schema.get("anyOf") or schema.get("any_of") or schema.get("oneOf") or schema.get("allOf")
+    if isinstance(any_of_items, list):
+        clean_any_of: list[dict[str, Any]] = []
+        for item in any_of_items:
+            item_type, item_nullable = _schema_type(item.get("type") if isinstance(item, dict) else None)
+            nullable = nullable or item_nullable or item_type == "null"
+            if item_type == "null":
+                continue
+            if isinstance(item, dict):
+                clean_any_of.append(_sanitize_llm_schema(item))
+        if clean_any_of:
+            sanitized["anyOf"] = clean_any_of
+
+    if isinstance(schema.get("nullable"), bool) or nullable:
+        sanitized["nullable"] = bool(schema.get("nullable") or nullable)
+
+    if not sanitized:
+        return {"type": "string"}
+    return sanitized
+
+
+def _sanitize_tool_properties(properties: Any) -> dict[str, Any]:
+    if not isinstance(properties, dict):
+        return {}
+    return {
+        str(name): _sanitize_llm_schema(schema)
+        for name, schema in properties.items()
+        if isinstance(name, str)
+    }
+
+
+def _sanitize_function_schema(tool: FunctionSchema) -> FunctionSchema:
+    properties = _sanitize_tool_properties(tool.properties)
+    required = [
+        name
+        for name in (tool.required or [])
+        if isinstance(name, str) and (not properties or name in properties)
+    ]
+    return FunctionSchema(
+        name=tool.name,
+        description=tool.description,
+        properties=properties,
+        required=required,
+    )
+
+
+def _sanitize_tools_schema(tools: ToolsSchema) -> ToolsSchema:
+    return ToolsSchema(
+        standard_tools=[_sanitize_function_schema(tool) for tool in tools.standard_tools]
+    )
 
 
 def _new_history_item(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], float]:
@@ -258,7 +385,7 @@ class HomeAssistantMCPBridge:
             logger.debug("Using cached MCP tool schema for {} at {}", self.name, self.url)
             return cached[0]
 
-        tools = await self.client.get_tools_schema()
+        tools = _sanitize_tools_schema(await self.client.get_tools_schema())
         if cache_enabled:
             MCP_TOOLS_SCHEMA_CACHE[cache_key] = (tools, now)
         return tools
@@ -389,12 +516,17 @@ class CombinedMCPBridge:
                     public_name = f"{prefix}_{len(seen)}__{original_name}"
                 seen.add(public_name)
                 routes[public_name] = (bridge, original_name)
+                public_properties = _sanitize_tool_properties(tool.properties)
                 public_tools.append(
                     FunctionSchema(
                         name=public_name,
                         description=f"{bridge.name}: {tool.description}",
-                        properties=tool.properties,
-                        required=tool.required,
+                        properties=public_properties,
+                        required=[
+                            name
+                            for name in (tool.required or [])
+                            if isinstance(name, str) and name in public_properties
+                        ],
                     )
                 )
 

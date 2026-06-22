@@ -1,7 +1,7 @@
 {
   "domain": "pipecat_assist",
   "name": "Pipecat Assist",
-  "version": "0.1.70",
+  "version": "0.1.71",
   "codeowners": ["@kyvaith"],
   "config_flow": true,
   "dependencies": ["ai_task", "conversation", "frontend", "lovelace", "stt", "tts"],
