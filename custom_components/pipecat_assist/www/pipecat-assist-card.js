@@ -1,4 +1,4 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.1.68";
+const PIPECAT_ASSIST_CARD_VERSION = "0.1.69";
 const DEFAULT_ACCENT_HEX = "#206cff";
 const DEFAULT_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -13,18 +13,18 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const END_CONVERSATION_PHRASES = [
-  "to wszystko",
-  "koniec rozmowy",
-  "ok koniec",
-  "okej koniec",
-  "that is all",
-  "that's all",
-  "end conversation",
-  "stop listening",
-  "we are done",
-  "goodbye",
+const END_CONVERSATION_PATTERNS = [
+  /\b(to wszystko|wystarczy|dziekuje to wszystko|dzieki to wszystko)\b/,
+  /\b(dziekuje koniec|dzieki koniec|ok koniec|okej koniec|dobra koniec)\b/,
+  /\b(koniec rozmowy|konczymy rozmowe|zakoncz rozmowe|zakonczmy rozmowe)\b/,
+  /\b(przestan sluchac|nie sluchaj|nie nasluchuj)\b/,
+  /\b(that is all|that's all|thanks that's all|thank you that's all)\b/,
+  /\b(end conversation|stop listening|we are done|goodbye|bye for now)\b/,
+  /\b(milego dnia|do uslyszenia|do zobaczenia|na razie)\b/,
+  /\b(have a nice day|talk to you later|see you later)\b/,
 ];
+const SHORT_END_CONVERSATION_PATTERN =
+  /^(?:ok|okej|dobra|no|dziekuje|dzieki|thanks|thank you)?\s*(?:koniec|wystarczy|goodbye|bye)\s*$/;
 const CARD_TRANSLATIONS = {
   en: {
     ready: "Ready",
@@ -320,8 +320,18 @@ function isRtviAssistantTextType(type) {
 }
 
 function shouldEndConversation(text) {
-  const clean = String(text || "").toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
-  return END_CONVERSATION_PHRASES.some((phrase) => clean.includes(phrase));
+  const clean = String(text || "")
+    .replace(/ł/g, "l")
+    .replace(/Ł/g, "L")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9']+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return false;
+  return SHORT_END_CONVERSATION_PATTERN.test(clean)
+    || END_CONVERSATION_PATTERNS.some((pattern) => pattern.test(clean));
 }
 
 function rememberAudioSampleRate(value) {
@@ -433,6 +443,9 @@ class PipecatAssistCard extends HTMLElement {
     this.localSpeechEnding = false;
     this.localSpeechPausedForAssistant = false;
     this.localSpeechResumeTimer = undefined;
+    this.endConversationPending = false;
+    this.endConversationTimer = undefined;
+    this.endConversationStopping = false;
     this.userTranscript = "";
     this.assistantTranscript = "";
     this.partialTranscript = "";
@@ -581,6 +594,7 @@ class PipecatAssistCard extends HTMLElement {
     this.lastUserTextAt = 0;
     this.botSpeaking = false;
     this.ignoreLocalSpeechUntil = 0;
+    this.clearEndConversationRequest();
     this.resetTranscriptState();
   }
 
@@ -1214,7 +1228,35 @@ class PipecatAssistCard extends HTMLElement {
     if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
   }
 
+  clearEndConversationRequest() {
+    if (this.endConversationTimer) {
+      clearTimeout(this.endConversationTimer);
+      this.endConversationTimer = undefined;
+    }
+    this.endConversationPending = false;
+  }
+
+  finishConversationAfterAssistant(delayMs = 350) {
+    if (this.endConversationStopping) return;
+    this.endConversationStopping = true;
+    this.clearEndConversationRequest();
+    window.setTimeout(() => {
+      this.stop();
+      this.endConversationStopping = false;
+    }, delayMs);
+  }
+
+  requestConversationEnd(fallbackMs = 8000) {
+    this.endConversationPending = true;
+    if (this.endConversationTimer) clearTimeout(this.endConversationTimer);
+    this.endConversationTimer = window.setTimeout(() => {
+      this.finishConversationAfterAssistant(0);
+    }, fallbackMs);
+  }
+
   stop() {
+    this.endConversationStopping = true;
+    this.clearEndConversationRequest();
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = undefined;
@@ -1252,6 +1294,7 @@ class PipecatAssistCard extends HTMLElement {
     this.clearTranscriptData();
     this.state = "idle";
     this.detail = this.t("ready");
+    this.endConversationStopping = false;
     this.render();
   }
 
@@ -1431,6 +1474,10 @@ class PipecatAssistCard extends HTMLElement {
     this.streamAssistantMessageId = "";
     this.ttsEstimatedDuration = 0;
     this.ignoreLocalSpeechUntil = Date.now() + 900;
+    if (this.endConversationPending) {
+      this.finishConversationAfterAssistant(350);
+      return;
+    }
     if (resumeLocalSpeech && ["requesting", "connecting", "connected"].includes(this.state)) {
       this.resumeLocalSpeechAfterAssistant(450);
     }
@@ -1495,7 +1542,7 @@ class PipecatAssistCard extends HTMLElement {
     }
     this.setCurrentUserCaption(this.currentUserText, startsNewUserTurn);
     if (shouldEndConversation(`${this.currentUserText} ${this.partialTranscript}`)) {
-      window.setTimeout(() => this.stop(), 450);
+      this.requestConversationEnd(9000);
     }
   }
 
@@ -1544,7 +1591,7 @@ class PipecatAssistCard extends HTMLElement {
     this.ignoreLocalSpeechUntil = Date.now() + 1200;
     this.setCurrentAssistantCaption(this.assistantTurnText);
     if (shouldEndConversation(this.assistantTranscript)) {
-      window.setTimeout(() => this.stop(), 650);
+      this.requestConversationEnd(5000);
     }
   }
 
@@ -1558,6 +1605,10 @@ class PipecatAssistCard extends HTMLElement {
     }
     const type = String(message.type || message.event || message.name || "").toLowerCase();
     const label = String(message.label || "").toLowerCase();
+    if (["conversation-ended", "conversation_end", "end-conversation"].includes(type)) {
+      this.requestConversationEnd(1200);
+      return;
+    }
     if (type === "bot-llm-started" || type === "bot-tts-started" || type === "bot-started-speaking") {
       this.beginAssistantTurn();
     }

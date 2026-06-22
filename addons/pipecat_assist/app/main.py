@@ -9,7 +9,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
+import unicodedata
 import wave
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -115,6 +117,10 @@ TTS_MEDIA_TYPES = {
     "pcm": "audio/L16",
     "wav": "audio/wav",
 }
+CONVERSATION_END_SYSTEM_HINT = (
+    "If the user clearly ends the conversation, briefly acknowledge it and do not ask "
+    "a follow-up question. The client will close the microphone after your farewell."
+)
 HA_STT_BRIDGE_KINDS = {
     "deepgram",
     "gemini",
@@ -767,10 +773,12 @@ async def api_conversation(payload: dict[str, Any]):
                 detail=f"Pipecat Live Bridge conversation failed: {err}",
             ) from err
         if live_result:
-            live_result["continue_conversation"] = not _should_end_conversation(
+            end_conversation = _should_end_conversation(
                 text,
                 str(live_result.get("speech") or ""),
             )
+            live_result["end_conversation"] = end_conversation
+            live_result["continue_conversation"] = not end_conversation
             logger.info(
                 "HA Assist conversation served from Pipecat Live Bridge flow={} input={} speech={} continue={} total_ms={:.0f}",
                 flow.id,
@@ -791,9 +799,11 @@ async def api_conversation(payload: dict[str, Any]):
             flow_id=flow.id,
             mcp_token=config.effective_mcp_token,
         )
+        end_conversation = _should_end_conversation(text, str(result.get("speech") or ""))
+        result["end_conversation"] = end_conversation
         result["continue_conversation"] = (
             not bool(result.get("error"))
-            and not _should_end_conversation(text, str(result.get("speech") or ""))
+            and not end_conversation
         )
         if not result.get("error"):
             _start_tts_prefetch(
@@ -1489,7 +1499,7 @@ def _text_fingerprint(text: str) -> str:
     return f"len={len(clean)} sha1={digest}"
 
 
-def _should_end_conversation(*texts: str | None) -> bool:
+def _legacy_should_end_conversation(*texts: str | None) -> bool:
     """Return true when the user or assistant clearly closes the conversation."""
 
     phrases = (
@@ -1519,6 +1529,41 @@ def _should_end_conversation(*texts: str | None) -> bool:
             continue
         compact = " ".join(clean.replace(".", " ").replace(",", " ").replace("!", " ").split())
         if any(phrase in compact for phrase in phrases):
+            return True
+    return False
+
+
+def _conversation_end_text(text: str | None) -> str:
+    normalized = unicodedata.normalize("NFKD", str(text or "").replace("ł", "l").replace("Ł", "L"))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    ascii_text = re.sub(r"[^a-z0-9']+", " ", ascii_text)
+    return re.sub(r"\s+", " ", ascii_text).strip()
+
+
+def _should_end_conversation(*texts: str | None) -> bool:
+    """Return true when the user or assistant clearly closes the conversation."""
+
+    phrase_patterns = (
+        r"\b(to wszystko|wystarczy|dziekuje to wszystko|dzieki to wszystko)\b",
+        r"\b(dziekuje koniec|dzieki koniec|ok koniec|okej koniec|dobra koniec)\b",
+        r"\b(koniec rozmowy|konczymy rozmowe|zakoncz rozmowe|zakonczmy rozmowe)\b",
+        r"\b(przestan sluchac|nie sluchaj|nie nasluchuj)\b",
+        r"\b(that is all|that's all|thanks that's all|thank you that's all)\b",
+        r"\b(end conversation|stop listening|we are done|goodbye|bye for now)\b",
+        r"\b(milego dnia|do uslyszenia|do zobaczenia|na razie)\b",
+        r"\b(have a nice day|talk to you later|see you later)\b",
+    )
+    short_end_pattern = re.compile(
+        r"^(?:ok|okej|dobra|no|dziekuje|dzieki|thanks|thank you)?\s*"
+        r"(?:koniec|wystarczy|goodbye|bye)\s*$"
+    )
+    for text in texts:
+        clean = _conversation_end_text(text)
+        if not clean:
+            continue
+        if short_end_pattern.search(clean):
+            return True
+        if any(re.search(pattern, clean) for pattern in phrase_patterns):
             return True
     return False
 
@@ -3037,10 +3082,12 @@ async def _ha_live_conversation_result(
     if turn.error or not turn.speech.strip():
         return None
     _remember_ha_live_speech(turn)
+    end_conversation = _should_end_conversation(turn.transcript, turn.speech)
     return {
         "speech": turn.speech.strip(),
         "conversation_id": conversation_id,
-        "continue_conversation": not _should_end_conversation(turn.transcript, turn.speech),
+        "continue_conversation": not end_conversation,
+        "end_conversation": end_conversation,
         "error": "",
         "source": "pipecat_live_bridge",
     }
@@ -3641,6 +3688,8 @@ def _web_search_announces(flow: FlowConfig) -> bool:
 
 def _effective_instructions(flow: FlowConfig) -> str:
     instructions = flow.instructions
+    if CONVERSATION_END_SYSTEM_HINT not in instructions:
+        instructions += f"\n\n{CONVERSATION_END_SYSTEM_HINT}"
     if _web_search_announces(flow):
         instructions += (
             "\n\nWhen you decide to use web search, first say "

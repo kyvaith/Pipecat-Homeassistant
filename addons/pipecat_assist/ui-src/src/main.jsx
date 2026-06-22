@@ -140,24 +140,24 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.1.68";
+const ASSISTANT_CARD_VERSION = "0.1.69";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
 const STREAM_CHARS_PER_GROUP = 2;
 const STREAM_FADE_LEN = STREAM_FADE_GROUPS * STREAM_CHARS_PER_GROUP;
-const END_CONVERSATION_PHRASES = [
-  "to wszystko",
-  "koniec rozmowy",
-  "ok koniec",
-  "okej koniec",
-  "that is all",
-  "that's all",
-  "end conversation",
-  "stop listening",
-  "we are done",
-  "goodbye",
+const END_CONVERSATION_PATTERNS = [
+  /\b(to wszystko|wystarczy|dziekuje to wszystko|dzieki to wszystko)\b/,
+  /\b(dziekuje koniec|dzieki koniec|ok koniec|okej koniec|dobra koniec)\b/,
+  /\b(koniec rozmowy|konczymy rozmowe|zakoncz rozmowe|zakonczmy rozmowe)\b/,
+  /\b(przestan sluchac|nie sluchaj|nie nasluchuj)\b/,
+  /\b(that is all|that's all|thanks that's all|thank you that's all)\b/,
+  /\b(end conversation|stop listening|we are done|goodbye|bye for now)\b/,
+  /\b(milego dnia|do uslyszenia|do zobaczenia|na razie)\b/,
+  /\b(have a nice day|talk to you later|see you later)\b/,
 ];
+const SHORT_END_CONVERSATION_PATTERN =
+  /^(?:ok|okej|dobra|no|dziekuje|dzieki|thanks|thank you)?\s*(?:koniec|wystarczy|goodbye|bye)\s*$/;
 
 const ASSISTANT_CARD_TRANSLATIONS = {
   en: {
@@ -437,8 +437,18 @@ function isRtviAssistantTextType(type) {
 }
 
 function shouldEndConversation(text) {
-  const clean = String(text || "").toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
-  return END_CONVERSATION_PHRASES.some((phrase) => clean.includes(phrase));
+  const clean = String(text || "")
+    .replace(/ł/g, "l")
+    .replace(/Ł/g, "L")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9']+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return false;
+  return SHORT_END_CONVERSATION_PATTERN.test(clean)
+    || END_CONVERSATION_PATTERNS.some((pattern) => pattern.test(clean));
 }
 
 function assistantCardT(key) {
@@ -4629,6 +4639,9 @@ function VoiceTest({ config, flow }) {
   const botSpeakingRef = useRef(false);
   const ignoreLocalSpeechUntilRef = useRef(0);
   const assistantTurnFinishTimerRef = useRef(null);
+  const endConversationPendingRef = useRef(false);
+  const endConversationTimerRef = useRef(null);
+  const endConversationStoppingRef = useRef(false);
   const localSpeechRecognitionRef = useRef(null);
   const localSpeechEndingRef = useRef(false);
   const localSpeechPausedForAssistantRef = useRef(false);
@@ -4657,6 +4670,7 @@ function VoiceTest({ config, flow }) {
       disposeSession(true, false);
       stopLocalSpeechRecognition();
       cancelLocalSpeechResume();
+      clearEndConversationRequest();
       stopTranscriptScroll();
       if (assistantTurnFinishTimerRef.current) clearTimeout(assistantTurnFinishTimerRef.current);
       if (visualizerFrameRef.current) cancelAnimationFrame(visualizerFrameRef.current);
@@ -4678,6 +4692,32 @@ function VoiceTest({ config, flow }) {
     stateRef.current = nextState;
     setState(nextState);
     setDetail(nextDetail);
+  }
+
+  function clearEndConversationRequest() {
+    if (endConversationTimerRef.current) {
+      clearTimeout(endConversationTimerRef.current);
+      endConversationTimerRef.current = null;
+    }
+    endConversationPendingRef.current = false;
+  }
+
+  function finishConversationAfterAssistant(delayMs = 350) {
+    if (endConversationStoppingRef.current) return;
+    endConversationStoppingRef.current = true;
+    clearEndConversationRequest();
+    window.setTimeout(() => {
+      stopVoiceTest();
+      endConversationStoppingRef.current = false;
+    }, delayMs);
+  }
+
+  function requestConversationEnd(fallbackMs = 8000) {
+    endConversationPendingRef.current = true;
+    if (endConversationTimerRef.current) clearTimeout(endConversationTimerRef.current);
+    endConversationTimerRef.current = window.setTimeout(() => {
+      finishConversationAfterAssistant(0);
+    }, fallbackMs);
   }
 
   function commitMessages(updater) {
@@ -4761,6 +4801,7 @@ function VoiceTest({ config, flow }) {
     lastUserTextAtRef.current = 0;
     botSpeakingRef.current = false;
     ignoreLocalSpeechUntilRef.current = 0;
+    clearEndConversationRequest();
     currentUserMessageIdRef.current = "";
     currentAssistantMessageIdRef.current = "";
     streamAssistantMessageIdRef.current = "";
@@ -5125,7 +5166,7 @@ function VoiceTest({ config, flow }) {
     }
     setCurrentUserCaption(currentUserTextRef.current, startsNewUserTurn);
     if (shouldEndConversation(`${currentUserTextRef.current} ${partialTranscriptRef.current}`)) {
-      window.setTimeout(() => stopVoiceTest(), 450);
+      requestConversationEnd(9000);
     }
   }
 
@@ -5170,6 +5211,10 @@ function VoiceTest({ config, flow }) {
     botSpeakingRef.current = false;
     streamAssistantMessageIdRef.current = "";
     ignoreLocalSpeechUntilRef.current = Date.now() + 900;
+    if (endConversationPendingRef.current) {
+      finishConversationAfterAssistant(350);
+      return;
+    }
     if (resumeLocalSpeech && ["requesting", "connecting", "connected"].includes(stateRef.current)) {
       resumeLocalSpeechAfterAssistant(450);
     }
@@ -5231,7 +5276,7 @@ function VoiceTest({ config, flow }) {
     ignoreLocalSpeechUntilRef.current = Date.now() + 1200;
     setCurrentAssistantCaption(assistantTurnTextRef.current);
     if (shouldEndConversation(assistantTranscriptRef.current)) {
-      window.setTimeout(() => stopVoiceTest(), 650);
+      requestConversationEnd(5000);
     }
   }
 
@@ -5262,6 +5307,10 @@ function VoiceTest({ config, flow }) {
     }
     const type = String(message.type || message.event || message.name || "").toLowerCase();
     const label = String(message.label || "").toLowerCase();
+    if (["conversation-ended", "conversation_end", "end-conversation"].includes(type)) {
+      requestConversationEnd(1200);
+      return;
+    }
     if (type === "bot-llm-started" || type === "bot-tts-started" || type === "bot-started-speaking") {
       beginAssistantTurn();
     }
@@ -5396,7 +5445,10 @@ function VoiceTest({ config, flow }) {
   }
 
   function stopVoiceTest(updateState = true) {
+    endConversationStoppingRef.current = true;
+    clearEndConversationRequest();
     finishAssistantTurn(false);
+    endConversationStoppingRef.current = false;
     clearSession(updateState ? "idle" : stateRef.current, updateState ? assistantCardT("ready") : detail);
   }
 

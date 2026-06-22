@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.69
+
+- End realtime and HA Assist conversations when the user clearly closes the
+  session, including Polish phrases such as "dziekuje, koniec".
+- Add a model instruction for graceful final replies without follow-up
+  questions when a conversation is ending.
+- Delay WebRTC shutdown until the assistant's final TTS turn finishes, with a
+  fallback timeout for providers that do not emit speech-stop events.
+
 ## 0.1.68
 
 - Expose Pipecat Assist as a Home Assistant AI Tasks image-generation provider.

@@ -21,6 +21,11 @@ from app.config import (
 from app.mcp_bridge import CombinedMCPBridge
 from app.web_search_tool import WEB_SEARCH_TOOL_NAME, run_gemini_web_search, run_openai_web_search
 
+CONVERSATION_END_SYSTEM_HINT = (
+    "If the user clearly ends the conversation, briefly acknowledge it and do not ask "
+    "a follow-up question. The client will close the microphone after your farewell."
+)
+
 
 def _format_openai_tools(tools_schema) -> list[dict[str, Any]]:
     """Convert Pipecat FunctionSchema objects to OpenAI Chat tools."""
@@ -116,6 +121,8 @@ def _web_search_announces(flow) -> bool:
 
 def _effective_instructions(flow) -> str:
     instructions = flow.instructions
+    if CONVERSATION_END_SYSTEM_HINT not in instructions:
+        instructions += f"\n\n{CONVERSATION_END_SYSTEM_HINT}"
     if _web_search_announces(flow):
         instructions += (
             "\n\nWhen you decide to use web search, first say "
