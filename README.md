@@ -132,8 +132,6 @@ responsive realtime experience.
 
 ![Pipecat Flow editor](docs/screenshots/pipecat-flow-editor.png)
 
-![Pipecat Flow editor wide view](docs/screenshots/pipecat-flow-editor-wide.png)
-
 ## Repository layout
 
 - `addons/pipecat_assist` - the Home Assistant app/add-on. It runs Pipecat,
